@@ -1,7 +1,7 @@
 <p align="center">
-  <img src="assets/icon.png" alt="DualCPY logo" height="96" align="middle">
+  <img src=".github/icon.png" alt="DualCPY logo" height="96" align="middle">
   &nbsp;&nbsp;
-  <img src="assets/screenshots/dualcpy_wordmark.svg" alt="DualCPY" height="68" align="middle">
+  <img src=".github/dualcpy_name.svg" alt="DualCPY" height="68" align="middle">
 </p>
 
 > [!NOTE]
