@@ -20,43 +20,6 @@ It launches two scrcpy windows (one for each display) and embeds them into a nat
 
 Please report any issues at https://github.com/theswest/DualCPY/issues
 
-<h2 align="center">Screenshots</h2>
-
-<table align="center">
-  <tr>
-    <td align="center"><b>Control Panel</b></td>
-    <td align="center"><b>Dual-Screen Capture</b></td>
-  </tr>
-  <tr>
-    <td><img src="assets/screenshots/main_ui.png" alt="Control Panel" width="420"></td>
-    <td><img src="assets/screenshots/dualcpy-screenshot.png" alt="Dual-screen capture" width="420"></td>
-  </tr>
-  <tr>
-    <td align="center"><b>File Transfer</b></td>
-    <td align="center"><b>Device Profiles</b></td>
-  </tr>
-  <tr>
-    <td><img src="assets/screenshots/file_transfer.png" alt="File transfer" width="420"></td>
-    <td><img src="assets/screenshots/device_profiles.png" alt="Device profiles" width="420"></td>
-  </tr>
-</table>
-
-<p align="center"><sub>Screenshots feature <a href="https://iisu.network/"><b>iiSU</b></a></sub></p>
-
-## What's New in 1.0.0
-
-- Rebranded from ThorCPY to DualCPY, with a brand-new logo and splash screen
-- Complete UI redesign in CustomTkinter, with a cleaner, more modern design language
-- Multi-device support with automatic device detection and built-in profiles for many handhelds
-- Profile editor for custom devices, screen sizes, internal monitors, and per-profile scrcpy commands
-- File Transfer window for two-way file management over ADB (@DrSkyfaR & @theswest)
-- Gamepad passthrough to the device
-- FPS selector and Restart button in the control panel (@tommywaaf)
-- Undocked windows now have title bars for easy resizing and moving (@tommywaaf)
-- Updated bundled scrcpy to v4.0, plus major backend performance and latency improvements
-
-See the full [CHANGELOG](CHANGELOG.md) for details.
-
 ## Features
 
 - Multi-device support with built-in profiles for many dual-screen handhelds (AYN Thor, RG DS, Pocket DS, OneXSugar Sugar 1, Retroid/AYN Odin + RDS, Retroid Pocket + RDS, and more), plus custom user-defined profiles
