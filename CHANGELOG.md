@@ -49,6 +49,7 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 - Control panel opens flush against the stage (measures the visible frame, not Windows' invisible borders)
 - Tidier control panel: one row of mode buttons; separate Stream (Quality, Top FPS, Bottom FPS, test/restart) and Audio (output, latency, volume) sections; experimental options (controller overlay, renderer) in Settings
 - Switching the controller overlay off now clears the strips immediately (they lingered until the view changed)
+- Control panel opens tall enough to show every option (90% of the screen on small monitors), with a tighter title area
 - USB audio buffer raised to 60 ms + 15 ms output (30 ms clicked on dense music - measured by scrcpy-thor-ui)
 - Screenshot button could crash the app (replaced dxcam with Windows screen capture; works on any monitor)
 - Overlapping stream restarts could orphan scrcpy processes that kept playing audio in the background

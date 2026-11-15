@@ -2127,6 +2127,7 @@ class Launcher:
         # Apply the default profile once the stage window exists, and put the
         # panel beside the stage rather than on top of it
         self.ui.window.after(1200, self.ui.load_default_profile)
+        self.ui.window.after(250, self.ui.fit_height)
         self.ui.window.after(400, self.ui.place_beside_stage)
         self.ui.window.after(1600, self.ui.place_beside_stage)
 

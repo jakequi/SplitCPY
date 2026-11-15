@@ -201,7 +201,7 @@ class CTkUI:
         self.window.iconbitmap()
         self.window.title("DualCPY Control Panel")
         self.window.configure(fg_color=BG_COLOUR)
-        self.window.minsize(360, 640)
+        self.window.minsize(360, 320)
 
         # Panel positioning
         try:
@@ -338,7 +338,7 @@ class CTkUI:
 
         # Title bar
         title_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        title_row.pack(fill="x", padx=16, pady=(18, 2))
+        title_row.pack(fill="x", padx=16, pady=(10, 0))
 
         try:
             pil_img = Image.open(ICON_PATH).resize((36, 36))
@@ -367,10 +367,11 @@ class CTkUI:
             self._scroll, text=" ", font=make_font(12),
             text_color=TEXT_COLOUR, anchor="w",
         )
-        self._status_label.pack(anchor="w", padx=16, pady=(2, 0))
+        self._status_label.configure(height=18)
+        self._status_label.pack(anchor="w", padx=16, pady=(0, 0))
 
         # -------------------------------------------------------- View
-        self._separator()
+        self._separator(pady=(4, 8))
         self._section("View")
 
         self._view_seg = ctk.CTkSegmentedButton(
@@ -602,10 +603,10 @@ class CTkUI:
             logger.debug(f"View button refresh failed: {e}")
 
     # Layout helpers
-    def _separator(self):
+    def _separator(self, pady=10):
         ctk.CTkFrame(
             self._scroll, height=1, fg_color=BORDER_COLOUR
-        ).pack(fill="x", padx=16, pady=10)
+        ).pack(fill="x", padx=16, pady=pady)
 
     def _section(self, label):
         row = ctk.CTkFrame(self._scroll, fg_color="transparent")
@@ -903,6 +904,35 @@ class CTkUI:
             pass
         windll.user32.GetWindowRect(hwnd, ctypes.byref(r))
         return r
+
+    def fit_height(self):
+        """
+        Open tall enough to show every option without scrolling; if the
+        monitor can't comfortably fit that, use 90% of its usable height.
+        """
+        try:
+            from src.win32_dock import monitor_work_area, frame_insets
+            self.window.update_idletasks()
+            me = windll.user32.GetParent(self.window.winfo_id()) or self.window.winfo_id()
+            work = monitor_work_area(me)
+            if not work:
+                return
+            # content + the scrollable frame's own border/padding
+            need_client = self._scroll.winfo_reqheight() + 16
+            style = windll.user32.GetWindowLongW(me, -16) & 0xFFFFFFFF
+            ex = windll.user32.GetWindowLongW(me, -20) & 0xFFFFFFFF
+            il, it, ir, ib = frame_insets(style, ex)
+            avail = work[3] - work[1]
+            outer_h = need_client + it + ib
+            if outer_h > avail * 0.95:
+                outer_h = int(avail * 0.9)
+            r = wintypes.RECT()
+            windll.user32.GetWindowRect(me, ctypes.byref(r))
+            y = max(work[1], min(r.top, work[3] - outer_h))
+            windll.user32.SetWindowPos(me, 0, r.left, y, r.right - r.left, outer_h, 0x0004 | 0x0010)
+            logger.info(f"Panel height fitted: {outer_h}px (content {need_client}px, screen {avail}px)")
+        except Exception as e:
+            logger.debug(f"Panel height fit failed: {e}")
 
     def place_beside_stage(self):
         """Put the panel flush against the DualCPY window (right side, else left)"""
