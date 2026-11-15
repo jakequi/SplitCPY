@@ -1,21 +1,5 @@
 # Changelog
 
-## DualCPY Split 1.0.2 - 15-11-2026
-
-### Changed
-- New DualCPY Split icon (app, taskbar, title bars, splash, README)
-- Balanced latency now streams at full resolution and bitrate like Low - only the audio buffer is larger. Only Stable (for weak Wi-Fi) lowers resolution
-
-### Bugfixes
-- Bottom screen took ~15 s to appear after a stream restart (e.g. after changing a setting or Test Connection): the top window was adopted before the start-up check could see it, so the check waited for its full timeout
-- Blocky / soft picture after Test Connection picked Balanced on Wi-Fi (it also cut the stream to 1280x720 and 960x836)
-
-## DualCPY Split 1.0.1 - 15-11-2026
-
-### Bugfixes
-- Black screens when a second copy of DualCPY Split (or DualCPY) was already running: both copies found scrcpy windows by the same title, so the running copy took over the new copy's streams. Window titles are now unique per copy
-- Only one DualCPY Split runs at a time - opening it again brings the running one to the front (an app restart still works)
-
 ## DualCPY Split 1.0.0 - 15-11-2026
 
 First release of DualCPY Split, a fork of [DualCPY](https://github.com/theswest/DualCPY) 1.0.0 by the_swest.
@@ -50,6 +34,8 @@ First release of DualCPY Split, a fork of [DualCPY](https://github.com/theswest/
 - Split-mode screenshots (both windows stacked into one image)
 
 ### Changed
+- New DualCPY Split icon (app, taskbar, title bars, splash, README)
+- Balanced latency now streams at full resolution and bitrate like Low - only the audio buffer is larger. Only Stable (for weak Wi-Fi) lowers resolution
 - Reorganised control panel (View / Aspect / Audio & Stream / Tools / Profiles / Settings); manual position sliders, size slider and layout presets replaced by the self-fitting stage and Profiles
 - Mouse wheel no longer changes slider values (it moved the volume while scrolling the panel)
 - Window size and position are remembered between launches
@@ -59,6 +45,10 @@ First release of DualCPY Split, a fork of [DualCPY](https://github.com/theswest/
 - scrcpy and adb are tied to DualCPY with a Windows job object, so they always close with it - even after a crash
 
 ### Bugfixes
+- Bottom screen took ~15 s to appear after a stream restart (e.g. after changing a setting or Test Connection): the top window was adopted before the start-up check could see it, so the check waited for its full timeout
+- Blocky / soft picture after Test Connection picked Balanced on Wi-Fi (it also cut the stream to 1280x720 and 960x836)
+- Black screens when a second copy of DualCPY Split (or DualCPY) was already running: both copies found scrcpy windows by the same title, so the running copy took over the new copy's streams. Window titles are now unique per copy
+- Only one DualCPY Split runs at a time - opening it again brings the running one to the front (an app restart still works)
 - Start-up: scrcpy windows open off-screen and are adopted within ~0.1 s (no flashing/jumping), and the control panel opens beside the stage instead of on top of it
 - Ctrl+Alt+M could hide the panel instead of showing it while fullscreen
 - Fullscreen / Split buttons are highlighted only while active
