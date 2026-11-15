@@ -374,20 +374,26 @@ class CTkUI:
         self._separator(pady=(4, 8))
         self._section("View")
 
-        self._view_seg = ctk.CTkSegmentedButton(
-            self._scroll, values=list(self._view_label_to_key.keys()),
-            command=lambda label: self.l.set_view_mode(self._view_label_to_key[label]),
-            font=make_font(14, "bold"), height=36,
-            fg_color=PANEL_COLOUR, selected_color=ACCENT_COLOUR,
-            selected_hover_color=ACCENT2_COLOUR, unselected_color=PANEL_COLOUR,
-            unselected_hover_color=BORDER_COLOUR, text_color=TEXT_COLOUR,
-        )
-        self._view_seg.pack(fill="x", padx=16, pady=(4, 6))
+        # View selector: three equal columns, the same grid as the
+        # Fullscreen / Split / Fit row below so the buttons line up
+        view_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        view_row.pack(fill="x", padx=16, pady=(4, 6))
+        self._view_btns = {}
+        for col, (label, key) in enumerate(self._view_label_to_key.items()):
+            view_row.columnconfigure(col, weight=1, uniform="view")
+            b = ctk.CTkButton(
+                view_row, text=label, height=36,
+                command=lambda k=key: self.l.set_view_mode(k),
+                fg_color=PANEL_COLOUR, hover_color=BORDER_COLOUR,
+                text_color=TEXT_COLOUR, font=make_font(14, "bold"),
+            )
+            b.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 3, 0 if col == 2 else 3))
+            self._view_btns[key] = b
 
         row = ctk.CTkFrame(self._scroll, fg_color="transparent")
         row.pack(fill="x", padx=16, pady=(0, 4))
         for c in range(3):
-            row.columnconfigure(c, weight=1)
+            row.columnconfigure(c, weight=1, uniform="view")
 
         def mode_button(var_text, command, col):
             b = ctk.CTkButton(
@@ -589,9 +595,12 @@ class CTkUI:
     def _refresh_view_buttons(self):
         """Reflect view mode / fullscreen / split state in the panel"""
         try:
-            label = {v: k for k, v in self._view_label_to_key.items()}[self.l.view_mode]
-            self._view_seg.set(label)
-            self._view_seg.configure(state="normal" if self.l.docked else "disabled")
+            for key, b in self._view_btns.items():
+                on = key == self.l.view_mode
+                b.configure(fg_color=ACCENT_COLOUR if on else PANEL_COLOUR,
+                            hover_color=ACCENT2_COLOUR if on else BORDER_COLOUR,
+                            text_color="#ffffff" if on else TEXT_COLOUR,
+                            state="normal" if self.l.docked else "disabled")
             self._fullscreen_btn_text.set("Exit Fullscreen" if self.l.fullscreen else "Fullscreen")
             self._dock_btn_text.set(self._dock_label())
             # Highlight only while the mode is actually on
