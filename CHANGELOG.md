@@ -1,5 +1,11 @@
 # Changelog
 
+## DualCPY Split 1.0.1 - 15-11-2026
+
+### Bugfixes
+- Black screens when a second copy of DualCPY Split (or DualCPY) was already running: both copies found scrcpy windows by the same title, so the running copy took over the new copy's streams. Window titles are now unique per copy
+- Only one DualCPY Split runs at a time - opening it again brings the running one to the front (an app restart still works)
+
 ## DualCPY Split 1.0.0 - 15-11-2026
 
 First release of DualCPY Split, a fork of [DualCPY](https://github.com/theswest/DualCPY) 1.0.0 by the_swest.

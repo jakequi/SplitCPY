@@ -18,7 +18,7 @@
 
 # main.py
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __app_name__ = "DualCPY Split"
 __author__ = "jakequi (fork of DualCPY by the_swest)"
 __description__ = "Dual-screen scrcpy launcher for the AYN Thor and other handhelds"
@@ -169,6 +169,40 @@ def check_runtime_structure():
         sys.exit(1)
 
 
+_instance_mutex = None
+SINGLE_INSTANCE_MUTEX = "Local\\DualCPYSplit.SingleInstance"
+
+
+def acquire_single_instance(wait_ms=4000):
+    """
+    True if this is the only running DualCPY Split. Waits briefly so an app
+    restart (old copy still shutting down) doesn't get turned away.
+    The mutex is released by Windows when the process exits, however it exits.
+    """
+    global _instance_mutex
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateMutexW.restype = wintypes.HANDLE
+    kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    _instance_mutex = kernel32.CreateMutexW(None, False, SINGLE_INSTANCE_MUTEX)
+    if not _instance_mutex:
+        return True  # can't tell - don't block start-up
+    WAIT_OBJECT_0, WAIT_ABANDONED = 0x0, 0x80
+    return kernel32.WaitForSingleObject(_instance_mutex, wait_ms) in (WAIT_OBJECT_0, WAIT_ABANDONED)
+
+
+def focus_existing_instance():
+    """Bring the running copy's control panel (and stage) to the front"""
+    user32 = ctypes.windll.user32
+    for title in ("DualCPY Split Control Panel",):
+        hwnd = user32.FindWindowW(None, title)
+        if hwnd:
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            user32.SetForegroundWindow(hwnd)
+            return True
+    return False
+
+
 def main():
     """
     DualCPY's main entry point
@@ -231,6 +265,13 @@ def main():
             logger.warning(f"SetPriorityClass(ABOVE_NORMAL) failed (GetLastError={err})")
     except Exception as PriorityErr:
         logger.warning(f"Could not raise host process priority: {PriorityErr}")
+
+    # Only one DualCPY Split at a time: two copies fight over the handheld,
+    # the hotkeys and each other's scrcpy windows
+    if not acquire_single_instance():
+        logger.info("DualCPY Split is already running - bringing it to the front")
+        focus_existing_instance()
+        return
 
     # Make sure scrcpy/adb always die with us, even after a crash
     from src import process_guard

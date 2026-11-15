@@ -730,8 +730,12 @@ class ScrcpyManager:
         return args
 
     def _window_titles(self):
+        # The process id makes the titles unique per DualCPY Split instance:
+        # windows are found by title, and with shared titles a second running
+        # copy adopted the first copy's streams (leaving it black)
         name = self.profile.name
-        return f"{name} - Top Screen - DualCPY", f"{name} - Bottom Screen - DualCPY"
+        tag = f"DualCPY Split {os.getpid()}"
+        return f"{name} - Top Screen - {tag}", f"{name} - Bottom Screen - {tag}"
 
     def _read_last_log(self):
         """Pull the last few lines from the most recent scrcpy log file."""
