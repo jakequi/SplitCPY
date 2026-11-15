@@ -1,6 +1,7 @@
-# DualCPY - Dual-screen scrcpy docking and control UI for Windows
-# Copyright (C) 2026 the_swest
-# Contact: Github issues
+# DualCPY Split - dual-screen scrcpy launcher for the AYN Thor and other handhelds
+# Copyright (C) 2026 the_swest (original DualCPY) and DualCPY Split contributors
+# Fork of https://github.com/theswest/DualCPY
+# Issues: https://github.com/jakequi/DualCPY-Split/issues
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -189,7 +190,7 @@ class FileTransferDialog:
     def _build_window(self):
         self.window = ctk.CTkToplevel(self.parent)
         self.window.withdraw()
-        self.window.title("File Transfer - DualCPY")
+        self.window.title("File Transfer - DualCPY Split")
         self.window.configure(fg_color=BG_COLOUR)
         self.window.geometry(f"{DIALOG_WIDTH}x{DIALOG_HEIGHT}")
         self.window.minsize(PANE_MIN_WIDTH * 2 + 120, 520)

@@ -1,284 +1,144 @@
 <p align="center">
-  <img src=".github/icon.png" alt="DualCPY logo" height="96" align="middle">
-  &nbsp;&nbsp;
-  <img src=".github/dualcpy_name.svg" alt="DualCPY" height="68" align="middle">
+  <img src=".github/icon.png" alt="DualCPY Split logo" height="96">
 </p>
 
-> [!IMPORTANT]
-> **DualCPY Split** is a fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest, adding an OBS-friendly stage (Both / Top / Bottom views, fullscreen, hotkeys), retro-system aspect presets, independent split windows, volume/audio output/latency options and Wi-Fi audio fixes. See [CHANGELOG.md](CHANGELOG.md).
+<h1 align="center">DualCPY Split</h1>
+
+<p align="center">
+  <em>Mirror both screens of the AYN Thor (and other dual-screen handhelds) to your PC -
+  built for streaming with OBS and for playing on your monitor with the handheld as a controller.</em>
+</p>
 
 > [!NOTE]
-> Previously known as **ThorCPY**. As of v1.0.0, the project supports all dual-screen handhelds - not just the AYN Thor - and has been renamed to **DualCPY**.
+> DualCPY Split is a fork of **[DualCPY](https://github.com/theswest/DualCPY)** by the_swest.
+> It keeps DualCPY's foundations (scrcpy docking, device profiles, file transfer) and adds an
+> OBS-friendly stage, instant connecting, console aspect presets, audio fixes and much more -
+> see the [changelog](CHANGELOG.md).
 
-DualCPY *(pronounced "Dual Copy")* is a Windows-based multi-window scrcpy launcher, designed specifically for dual-screen Android handhelds.
-It features a layout editor, window docking, screenshots, file transfer, device profiles, and real-time window positioning.
+**Windows 11 recommended** (Windows 10 1809+ should work).
 
-It launches two scrcpy windows (one for each display) and embeds them into a native Windows container - ideal for screensharing, recording, or livestreaming.
+---
 
-**DualCPY is primarily designed for Windows 11. It will work on Windows 10, however bugs may occur!**
+## Download
 
-**For Linux users, please use the Linux port: https://forgejo.skyfar.de/SkyfaR/DualCPY-Linux**
+Grab **`DualCPY-Split-v1.0.0-windows.zip`** from the
+[latest release](https://github.com/jakequi/DualCPY-Split/releases/latest), unzip it anywhere
+and run **`DualCPY-Split.exe`**. scrcpy and adb are included - nothing else to install.
+`config/` and `logs/` are created next to the exe on first launch.
 
-**For MacOS users, please use the MacOS port: https://github.com/sofianeelhor/DualCPY-macOS**
+### Run from source
+1. Install Python 3.10-3.13 (tick *"Add python.exe to PATH"*).
+2. `git clone https://github.com/jakequi/DualCPY-Split.git` and `cd DualCPY-Split`
+3. `pip install -r requirements.txt`
+4. `python main.py`
 
-Please report any issues at https://github.com/theswest/DualCPY/issues
+### Build the exe yourself
+`pip install pyinstaller`, then `python build.py` - the app is in `dist/DualCPY-Split/`.
+
+---
+
+## First-time setup
+
+On the handheld:
+1. **Enable Developer options:** Settings > About device > tap *Build number* 7 times.
+2. **USB:** turn on *USB debugging*, plug in, tap **Allow**. Done.
+3. **Wi-Fi:** turn on *Wireless debugging* and tick **"Always allow on this network"**.
+   In DualCPY Split choose *Pair / Connect Manually*, then on the handheld open
+   *Wireless debugging > Pair device with pairing code* - DualCPY Split fills in the address,
+   you just type the 6-digit code. You only pair once.
+4. **Tip:** Developer options > *Quick settings developer tiles* > **Wireless debugging** puts a
+   one-tap toggle in your quick settings.
+
+From then on, just open DualCPY Split. It finds the handheld on USB or Wi-Fi by itself (even after
+a restart, even though Android changes the port) and opens straight into the streams. If Wireless
+debugging is off it waits and connects the moment you turn it on.
+
+---
 
 ## Features
 
-- Multi-device support with built-in profiles for many dual-screen handhelds (AYN Thor, RG DS, Pocket DS, OneXSugar Sugar 1, Retroid/AYN Odin + RDS, Retroid Pocket + RDS, and more), plus custom user-defined profiles
-- Automatic device detection over ADB, with a device selector on launch and smart selection of the connected device
-- "Last used profile" is remembered per-device and auto-booted on launch
-- Both wired (USB) and wireless connection
-- Dock both screens into one window, or undock them into independent, resizable, title-barred windows for individual capture (e.g. streaming layouts)
-- Layout presets to position the screens precisely how you want
-- Screenshot capture grabs both screens together, in the layout you've got them in
-- File transfer to and from the device over ADB, with image previews, file metadata, and quick-nav shortcuts on both Windows and device sides
-- Profile editor for custom screen sizes, internal-monitor layouts, and per-profile scrcpy launch commands
-- Gamepad passthrough to the device (`--gamepad=uhid` on the top screen)
-- FPS selector and restart controls in the panel
-- Real-time positioning to move the screens into any arrangement
+### For OBS / streaming
+- **One window, exactly the game area** - no black bars for OBS to capture.
+  **Both** stacks the screens, **Top** / **Bottom** show one screen. Switching keeps the height;
+  dragging the edges keeps the shape.
+- **Fullscreen** (F11) centres the game on a black backdrop that OBS doesn't see.
+- **Split** turns the screens into two separate windows (resizable, individually capturable).
+- **Controller overlay (experimental)** - the Thor's buttons and sticks drawn beside the bottom
+  screen, lighting up live as you press them.
+- **Aspect presets** by ratio with the consoles that use it ("4:3 (DS, NES, SNES, PS1, ...)",
+  "3:2 (GBA)", "31:27 (Thor-B)", ...) - crops the black bars instantly, no stream restart.
 
-## Installation
+### For playing on your monitor
+- **Low-latency streaming** with Latency (Low / Balanced / Stable) and Quality
+  (Standard / High / Very High / Max) presets.
+- **Test Connection & Auto-Set** measures the Wi-Fi between handheld and PC and picks the best
+  Latency and Quality for you.
+- **Dim Thor screens** while you play on the monitor (restored afterwards).
+- **Audio output** on the PC, the handheld, or both; per-stream **volume**.
+- **Top / Bottom FPS** (up to 120, experimental) and an optional 30 FPS cap for the bottom screen.
 
-> **To use DualCPY, you must have *USB Debugging* enabled.**
-> **To enable *USB Debugging*:**
-> 1. On the device, go to **Settings > About device**.
-> 2. Tap the **Build number** seven times to unlock **Settings > Developer options**.
-> 3. Enable the **USB Debugging** option from Developer options.
->
-> Then connect your device via USB, or just launch DualCPY to start the wireless connection dialog.
+### Everything else
+- **Profiles** - save your whole setup; star one to load it on start-up.
+- **Auto-reconnect** if a stream drops; nothing left running when you close (even after a crash).
+- **File transfer**, **screenshots** (also in split mode), **device profiles** for other
+  dual-screen handhelds (can be switched off).
 
-### Option 1: Standalone Executable
-- Prebuilt executables can be found in [Releases](https://github.com/theswest/DualCPY/releases).
+### Hotkeys (work while gaming)
+| Keys | Action |
+|---|---|
+| Ctrl+Alt+1 / 2 / 3 | View: Both / Top / Bottom |
+| Ctrl+Alt+S | Cycle views |
+| Ctrl+Alt+F, or F11 while DualCPY Split is in front | Fullscreen |
+| Ctrl+Alt+M | Show / hide the control panel (also over fullscreen) |
+| Ctrl+Alt+O | Dim / restore the Thor's screens |
 
-### Option 2: Run from Source
-> Note: Pygame does not yet have a wheel for Python 3.14 - please use a lower version!
-1. Clone the repository:
-   - `git clone https://github.com/theswest/DualCPY.git`
-   - `cd DualCPY`
-2. Install Python dependencies:
-   - `pip install -r requirements.txt`
-3. Run DualCPY:
-   - `python main.py`
+### OBS setup
+Add a **Window Capture** of the `DualCPY Split | <device>` window, then right-click it >
+*Transform > Edit Transform* > **Bounding Box Type: Scale to inner bounds**, **Alignment: Center**.
+Switching between Both / Top / Bottom is then seamless.
 
-### Option 3: Build from Source
-1. Install PyInstaller:
-   - `pip install pyinstaller`
-2. Run the build script:
-   - `python build.py`
-3. Find your build:
-   - DualCPY is bundled in `dist/DualCPY/`.
+---
 
-**Note:** scrcpy and ADB binaries are bundled in DualCPY.
+## Roadmap
 
-## Bundled Software
+Planned for future versions:
+- **Fullscreen for split windows** - in Split mode, F11 makes the window you're in fullscreen on
+  its own monitor over a true-black background (e.g. top screen on the TV, bottom on the laptop).
+  Idea from [AndersonWood's DualCPY fork](https://github.com/AndersonWood/DualCPYerson).
 
-DualCPY includes the following third-party software:
-- **scrcpy v4.0** by Genymobile / Romain Vimont
-- Licensed under the Apache License 2.0
-- Source: https://github.com/Genymobile/scrcpy
+Suggestions and bug reports: [issues](https://github.com/jakequi/DualCPY-Split/issues).
 
-This bundled software is unmodified and used as-is for the convenience of end users.
-
-## Requirements
-
-### System
-- OS: Windows 11 (theoretically also Windows 10, 1809+)
-- Python 3.8 or higher when running from source
-- **Device:** a dual-screen Android handheld with USB debugging enabled
-
-### Python Dependencies
-- See [requirements.txt](https://github.com/theswest/DualCPY/blob/master/requirements.txt) for the full list. Install with:
-  - `pip install -r requirements.txt`
-
-## Usage
-
-### Connection
-- You can connect via USB (charging, offline, more stable) or wirelessly (no tethers).
-- To connect via USB:
-  - Ensure USB Debugging is enabled (see above).
-  - Plug in your device and launch DualCPY!
-- To connect wirelessly:
-  - Open DualCPY without your device connected via USB.
-  - Open the wireless connection menu.
-  - In your device's developer settings, enable Wireless debugging and tap the text to open its submenu.
-  - Tap Pair device with pairing code and enter the IP address, port, and pairing code shown.
-  - Once paired, copy the IP and port from the IP address & Port field into the Connect by IP field in DualCPY.
-  - Close the menu - DualCPY will automatically restart and connect!
-
-### Device Selection
-- On launch, DualCPY detects connected devices over ADB and shows a device selector.
-- It smart-selects the connected device and remembers the last used profile per device.
-- Don't see your device? Use the profile editor to add a custom profile (screen sizes, internal-monitor layout, and per-profile scrcpy launch command).
-
-### Main Controls
-The DualCPY control panel appears on the right-hand side of your screen with the following controls:
-- Global Scale: adjust the scale of the scrcpy outputs (requires restart)
-- FPS: select the target framerate
-- Restart: restart the mirroring session
-- Layout Adjustment:
-  - Top X / Top Y: position the top screen
-  - Bottom X / Bottom Y: position the bottom screen
-- Window Controls:
-  - Undock windows: separate into independent, title-barred floating windows (for individual capture, e.g. streaming)
-  - Dock windows: bring undocked windows back into one unified window
-  - Screenshot: capture the entire docked view to the clipboard (only works when docked)
-- File Transfer: open the file browser to move files between your PC and device over ADB
-- Preset Management:
-  - Adjust your layout as desired
-  - Enter a name in the preset field and click SAVE
-  - Click LOAD next to a saved preset to apply it
-  - Click DEL next to a saved preset to remove it
-
-### File Transfer
-- Transfer files in both directions (Windows -> device and device -> Windows) over ADB.
-- Delete, rename, and create folders on the device.
-- Windows quick-nav: Home, Desktop, Downloads, Documents, Pictures
-- Device quick-nav: Internal, Download, DCIM, Pictures, Music, Documents
-- Automatic SD card detection with quick-nav pills
-- Inline image previews with file metadata
-
-## Configuration
-
-### Layouts / Presets
-- Presets are stored in `config/layout.json`. You can edit this file manually if needed:
-```json title:layout.json
-{
-    "Default": {
-        "tx": 0,
-        "ty": 0,
-        "bx": 251,
-        "by": 648,
-        "global_scale": 0.6
-    },
-    "Streaming": {
-        "tx": 100,
-        "ty": 50,
-        "bx": 300,
-        "by": 700,
-        "global_scale": 0.3
-    }
-}
-```
-
-### Config
-- General settings are stored in `config/config.json`. You can edit this file manually if needed:
-```json title:config.json
-{
-    "tx": 0,
-    "ty": 0,
-    "bx": 250,
-    "by": 648,
-    "global_scale": 0.6,
-    "device_profiles": {
-        "78ab8b8f": "ayn_thor"
-    },
-    "last_profile": "AYN Thor",
-    "device_scales": {
-        "78ab8b8f": 0.6
-    }
-}
-```
-
-### Custom Profiles
-- Custom profiles are stored in `config/custom_profiles.json`. You can edit this file manually if needed:
-
-### Logging
-- Logs are saved to `logs/` with daily rotation:
-  - `dualcpy_YYYYMMDD.log` - main application log
-  - `scrcpy_top_YYYYMMDD_HHMMSS.log` - top window scrcpy output
-  - `scrcpy_bottom_YYYYMMDD_HHMMSS.log` - bottom window scrcpy output
-- To adjust verbosity, change the logging level in `main.py`:
-```python title=main.py
-logging.basicConfig(
-    level=logging.INFO, # Change to DEBUG for detailed logs
-    ...
-)
-```
+---
 
 ## Troubleshooting
 
-### Layout issues
-- Load a preset at 0.6 global scale and save it.
-- Delete `config/layout.json` and `config/config.json` so they are regenerated.
+- **Audio warps or crackles (Wi-Fi):** run *Test Connection & Auto-Set*, or set Latency to
+  Balanced, then Stable. USB gives the cleanest audio.
+- **Black or flickering screens:** Settings > Renderer > Direct3D 9.
+- **Handheld not found:** check USB debugging / Wireless debugging is on and both devices are on
+  the same network; *Pair / Connect Manually* in the waiting window lets you pair again.
+- **Logs:** `logs/dualcpy_<date>.log` and per-stream `logs/scrcpy_*.log` next to the app.
 
-### Device not found
-- Ensure USB debugging is enabled on your device - try a different USB cable (a data cable, not charging-only).
-- Revoke USB debugging authorizations and reconnect:
-  - Settings → System → Developer Options → Revoke USB debugging authorizations
-- Check if ADB can see your device: `bin/adb.exe devices`
-- Restart the ADB server: `bin/adb.exe kill-server` then `bin/adb.exe start-server`
+---
 
-### scrcpy won't start
-- Ensure `scrcpy.exe` is in the `bin/` folder.
-- Check the logs for detailed error messages.
-- Try running scrcpy manually: `bin/scrcpy.exe -s YOUR_DEVICE_SERIAL`
-- Update to the latest scrcpy version.
-- Ensure your device exposes the required display IDs for your profile.
+## Bundled software & licences
 
-### Windows won't dock
-- Wait a few seconds for windows to initialize.
-- Try toggling dock/undock a few times.
-- Restart the application.
-- Check the logs for errors.
-
-### Graphical Errors
-- Try toggling dock/undock a few times.
-- Restart the application.
-- Try a wireless connection to rule out USB issues
-- Check the logs for errors.
-
-### Performance issues
-- Reduce the global scale.
-- Lower the FPS in the control panel.
-- Close other resource-intensive applications.
-- Use a USB 3 port.
-- Try increasing the configurable screen-launch delay for lower-powered devices.
-
-### Gamepad not detected
-- You may need to reconnect your controller while DualCPY is running - this is an Android limitation with `--gamepad=uhid`.
-
-### Missing DLL or import errors
-- Reinstall dependencies: `pip install -r requirements.txt --force-reinstall`
-- Ensure Python 3.8+ is installed.
-- Install the Visual C++ Redistributables.
-
-### Known Issues
-- Restarting does not work when running from source.
-
-## Licenses
-
-- This project is licensed under the GNU General Public License v3.0 - see the LICENSE file [here](https://github.com/theswest/DualCPY/blob/master/bin/LICENSE). You are free to modify and redistribute it under the same terms.
-- [scrcpy](https://github.com/Genymobile/scrcpy) uses the Apache License 2.0, found [here](https://github.com/theswest/DualCPY/blob/master/bin/LICENSE_scrcpy.txt).
-- The in-app font is [Cal Sans](https://github.com/calcom/font), under the SIL Open Font License 1.1, found [here](https://github.com/theswest/DualCPY/blob/master/assets/fonts/OFL.txt).
-
-## Contributing
-
-Contributions are more than welcome! This started as a personal project but was released after several requests.
-Feel free to submit a pull request. For major changes, please open an issue first to discuss what you'd like to change.
-This was originally built as a quick personal tool, so refactoring PRs are especially welcome!
-
-## Supporting
-
-Buy me a coffee: https://ko-fi.com/theswest
+- DualCPY Split is licensed under the **GNU GPL v3.0** - see [LICENSE](LICENSE). You are free to
+  modify and redistribute it under the same terms.
+- Includes **[scrcpy](https://github.com/Genymobile/scrcpy) v4.0** by Genymobile / Romain Vimont,
+  unmodified, under the Apache License 2.0 ([bin/LICENSE_scrcpy.txt](bin/LICENSE_scrcpy.txt)).
+- UI font **[Cal Sans](https://github.com/calcom/font)**, SIL Open Font License 1.1
+  ([assets/fonts/OFL.txt](assets/fonts/OFL.txt)).
 
 ## Acknowledgements
 
-- **[DrSkyfaR](https://github.com/DrSkyfaR)** - File Transfer logic and the Linux port
-- **[tommywaaf](https://github.com/tommywaaf)** - backend performance work, FPS/restart controls, title-barred undocked windows, and more
-- **[eldermonkey](https://github.com/eldermonkey)** - for the legacy logo
+- **[the_swest](https://github.com/theswest)** - creator of [DualCPY](https://github.com/theswest/DualCPY), which this fork is built on
+  (support the original: https://ko-fi.com/theswest)
+- **[tommywaaf](https://github.com/tommywaaf)** - performance work in DualCPY and
+  [scrcpy-thor-ui](https://github.com/tommywaaf/scrcpy-thor-ui), source of the controller-overlay
+  idea, the Direct3D 11 finding and the audio-buffer measurements
+- **[DrSkyfaR](https://github.com/DrSkyfaR)** - file transfer and the Linux port of DualCPY
+- **[AndersonWood](https://github.com/AndersonWood)** - split-window fullscreen idea (roadmap)
+- **[eldermonkey](https://github.com/eldermonkey)** - the legacy logo
 - **[scrcpy](https://github.com/Genymobile/scrcpy)** by Romain Vimont - the backend
-- **[Cal Sans](https://github.com/calcom/font)** by Cal.com Inc. UI typography (SIL Open Font License 1.1)
-- **[CustomTkinter](https://github.com/TomSchimansky/CustomTkinter)** - modern UI toolkit
-- **Microsoft** - Windows API documentation
-- All other contributors and testers, especially dd, splain, and everyone else who helped!
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=theswest%2FDualCPY&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=theswest/DualCPY&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=theswest/DualCPY&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=theswest/DualCPY&type=date&legend=top-left" />
- </picture>
-</a>
+- **[CustomTkinter](https://github.com/TomSchimansky/CustomTkinter)** - UI toolkit

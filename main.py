@@ -1,6 +1,7 @@
-# DualCPY - Dual-screen scrcpy docking and control UI for Windows
-# Copyright (C) 2026 the_swest
-# Contact: Github issues
+# DualCPY Split - dual-screen scrcpy launcher for the AYN Thor and other handhelds
+# Copyright (C) 2026 the_swest (original DualCPY) and DualCPY Split contributors
+# Fork of https://github.com/theswest/DualCPY
+# Issues: https://github.com/jakequi/DualCPY-Split/issues
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -17,10 +18,10 @@
 
 # main.py
 
-__version__ = "1.1.0"
-__app_name__ = "DualCPY"
-__author__ = "the_swest"
-__description__ = "Android Dual screen mirroring and docking tool"
+__version__ = "1.0.0"
+__app_name__ = "DualCPY Split"
+__author__ = "jakequi (fork of DualCPY by the_swest)"
+__description__ = "Dual-screen scrcpy launcher for the AYN Thor and other handhelds"
 
 import os
 import sys

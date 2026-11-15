@@ -1,6 +1,7 @@
-# DualCPY - Dual-screen scrcpy docking and control UI for Windows
-# Copyright (C) 2026 the_swest
-# Contact: Github issues
+# DualCPY Split - dual-screen scrcpy launcher for the AYN Thor and other handhelds
+# Copyright (C) 2026 the_swest (original DualCPY) and DualCPY Split contributors
+# Fork of https://github.com/theswest/DualCPY
+# Issues: https://github.com/jakequi/DualCPY-Split/issues
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -700,7 +701,7 @@ class Launcher:
 
             # Build window title with device name if available
             device_label = getattr(self, "device_model", None) or "Unknown Device"
-            window_title = f"DualCPY | {device_label}"
+            window_title = f"DualCPY Split | {device_label}"
 
             # Create the container window
             hwnd = self.user32.CreateWindowExW(

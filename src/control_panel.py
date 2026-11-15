@@ -1,6 +1,7 @@
-# DualCPY - Dual-screen scrcpy docking and control UI for Windows
-# Copyright (C) 2026 the_swest
-# Contact: Github issues
+# DualCPY Split - dual-screen scrcpy launcher for the AYN Thor and other handhelds
+# Copyright (C) 2026 the_swest (original DualCPY) and DualCPY Split contributors
+# Fork of https://github.com/theswest/DualCPY
+# Issues: https://github.com/jakequi/DualCPY-Split/issues
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -89,7 +90,7 @@ def show_loading_screen():
 
     splash = ctk.CTk()
     splash.iconbitmap()
-    splash.title("DualCPY Loading...")
+    splash.title("DualCPY Split - Loading...")
 
     window_width = 480
     window_height = 190
@@ -136,6 +137,13 @@ def show_loading_screen():
         text="CPY",
         font=make_font(45, "bold"),
         text_color=ACCENT2_COLOUR,
+    ).pack(side="left")
+
+    ctk.CTkLabel(
+        title_frame,
+        text=" Split",
+        font=make_font(45, "bold"),
+        text_color=TEXT_COLOUR,
     ).pack(side="left")
 
     ctk.CTkLabel(
@@ -199,7 +207,7 @@ class CTkUI:
 
         self.window = ctk.CTk()
         self.window.iconbitmap()
-        self.window.title("DualCPY Control Panel")
+        self.window.title("DualCPY Split Control Panel")
         self.window.configure(fg_color=BG_COLOUR)
         self.window.minsize(360, 320)
 
@@ -430,7 +438,7 @@ class CTkUI:
                    "brightness while you play on the monitor (restored afterwards).\n"
                    "Hotkeys (work in-game): Ctrl+Alt+1 Both, Ctrl+Alt+2 Top, Ctrl+Alt+3 Bottom, "
                    "Ctrl+Alt+S cycle, Ctrl+Alt+F (or F11 when DualCPY is in front) fullscreen, Ctrl+Alt+M show/hide this menu, Ctrl+Alt+O dim Thor screens.\n"
-                   "OBS: Window Capture the \"DualCPY | ...\" window, then right-click it > Transform > "
+                   "OBS: Window Capture the \"DualCPY Split | ...\" window, then right-click it > Transform > "
                    "Edit Transform > Bounding Box Type: \"Scale to inner bounds\", Alignment: Center. "
                    "Switching views is then seamless.")
 

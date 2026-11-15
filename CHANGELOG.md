@@ -1,8 +1,8 @@
 # Changelog
 
-## DualCPY Split 1.1.0 - 15-11-2026
+## DualCPY Split 1.0.0 - 15-11-2026
 
-Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
+First release of DualCPY Split, a fork of [DualCPY](https://github.com/theswest/DualCPY) 1.0.0 by the_swest.
 
 ### Added
 - **View: Both / Top / Bottom** - the combined window is always exactly the game area (no black bars for OBS to capture): Both stacks the screens, Top / Bottom show one screen. Switching keeps the window height; dragging the edges keeps the shape
