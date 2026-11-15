@@ -1164,7 +1164,7 @@ class Launcher:
 
         self.save_layout()
         if restart:
-            self.restart_streams()
+            self.request_restart()
 
     def run_link_test(self):
         """
@@ -1337,6 +1337,26 @@ class Launcher:
         self._notify(f"Stream dropped - reconnecting ({self._reconnect_attempts}/3)...", "warning")
         self.restart_streams()
 
+    def request_restart(self, delay=1.0):
+        """
+        Restart the streams shortly after the last settings change, so clicking
+        through several options restarts once instead of every time (each
+        restart briefly drops audio). Retries if a restart is already running.
+        """
+        timer = getattr(self, "_restart_timer", None)
+        if timer:
+            timer.cancel()
+
+        def fire():
+            if self._restarting:
+                self.request_restart(0.5)
+            else:
+                self.restart_streams()
+
+        self._restart_timer = threading.Timer(delay, fire)
+        self._restart_timer.daemon = True
+        self._restart_timer.start()
+
     def restart_streams(self):
         """
         Restart both scrcpy streams in-process with the current settings
@@ -1398,7 +1418,7 @@ class Launcher:
                 changed = True
         if changed:
             logger.info(f"Stream options {options}; restarting streams")
-            self.restart_streams()
+            self.request_restart()
         return changed
 
     def set_stream_option(self, key, value):
@@ -1412,7 +1432,7 @@ class Launcher:
         except Exception as e:
             logger.warning(f"Failed to persist {key}: {e}")
         logger.info(f"Stream option {key} -> {value}; restarting streams")
-        self.restart_streams()
+        self.request_restart()
 
     # ------------------------------------------------------------------
     # Live scaling / fit to monitor

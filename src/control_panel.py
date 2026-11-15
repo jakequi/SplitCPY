@@ -836,7 +836,7 @@ class CTkUI:
                 return
             self.l.set_max_fps(fps)
             self.show_status(f"Frame rate {fps} FPS - restarting streams...", "info")
-            self.l.restart_streams()
+            self.l.request_restart()
         except Exception as e:
             logger.error(f"FPS change error: {e}")
 

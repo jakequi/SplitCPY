@@ -88,11 +88,13 @@ AUDIO_LATENCY_MODES = ("low", "auto", "stable")
 AUDIO_LATENCY_LABELS = {"low": "Low", "auto": "Balanced", "stable": "Stable"}
 AUDIO_BUFFER_MS = {
     # (usb, wireless)
-    "low": (30, 50),
+    # Wi-Fi delivers data in bursts; below ~80 ms scrcpy keeps resampling
+    # to stay in sync, which is heard as warping / speeding up / slowing down
+    "low": (30, 80),
     "auto": (60, 120),
     "stable": (120, 250),
 }
-AUDIO_OUTPUT_BUFFER_MS = {"low": 5, "auto": 10, "stable": 15}
+AUDIO_OUTPUT_BUFFER_MS = {"low": 10, "auto": 10, "stable": 15}
 # Wi-Fi stream caps per latency profile: (top max size, bottom max size, Mbps per megapixel)
 # None = native resolution
 WIRELESS_PROFILE = {

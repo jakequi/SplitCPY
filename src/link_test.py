@@ -45,7 +45,7 @@ DEVICE_TEST_PATH = "/data/local/tmp/dualcpy_linktest.bin"
 # from scrcpy_manager's WIRELESS_PROFILE. 120 FPS needs ~1.5x.
 PROFILE_NEED_MBPS = {"low": 28, "auto": 14, "stable": 7}
 # Audio buffer (ms) each profile has on Wi-Fi - jitter has to fit inside it
-PROFILE_AUDIO_BUFFER_MS = {"low": 50, "auto": 120, "stable": 250}
+PROFILE_AUDIO_BUFFER_MS = {"low": 80, "auto": 120, "stable": 250}
 # Required headroom: measured throughput / needed bitrate
 HEADROOM = 2.5
 
@@ -142,9 +142,12 @@ def recommend(result, wireless, fps=60):
     fps_factor = max(1.0, (fps / 60.0) ** 0.6)
     for key in ("low", "auto", "stable"):
         need = PROFILE_NEED_MBPS[key] * fps_factor * HEADROOM
-        # adb round trips include ~a few ms of adb overhead, so jitter here is a
-        # slight over-estimate - keep it within half the audio buffer
-        jitter_ok = result["jitter_ms"] <= PROFILE_AUDIO_BUFFER_MS[key] / 2
+        # Jitter is measured on a quiet link; a running stream makes Wi-Fi far
+        # burstier, so demand a big margin: Low only for near-perfect links
+        if key == "low":
+            jitter_ok = result["jitter_ms"] <= 6 and result.get("rtt_ms", 99) <= 5
+        else:
+            jitter_ok = result["jitter_ms"] <= PROFILE_AUDIO_BUFFER_MS[key] / 3
         if result["mbps"] >= need and jitter_ok:
             if key == "low":
                 return key, "Strong, steady Wi-Fi - lowest latency, full quality"
@@ -161,7 +164,9 @@ def recommend_quality(result, wireless, fps=60, latency_key="low"):
         return "very_high"
     fps_factor = max(1.0, (fps / 60.0) ** 0.6)
     best = "standard"
-    for q in ("standard", "high", "very_high", "max"):
+    # Max is constant high airtime on Wi-Fi (more bursts -> audio trouble):
+    # only recommend it over USB
+    for q in ("standard", "high", "very_high"):
         need = PROFILE_NEED_MBPS.get(latency_key, 28) * fps_factor * QUALITY_MULTIPLIER[q] * HEADROOM
         if result.get("mbps", 0) >= need:
             best = q

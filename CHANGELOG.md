@@ -18,7 +18,7 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 - **Instant wireless connect**: on start-up a paired handheld is reconnected automatically (finds its current wireless-debugging port on the network, or uses the last address) - no dialog. Quick Connect and Pair now go straight into the streams instead of waiting for you to close the window; if the port changed, the new one is found automatically
 - **Volume slider** (sets the stream's volume in the Windows mixer)
 - **Audio output** setting: PC, Device (keep sound on the handheld) or Both (Android 13+)
-- **Latency** setting: Low (default; full quality, smallest buffers), Balanced, Stable
+- **Latency** setting: Low (default; 30 ms audio buffer on USB, 80 ms on Wi-Fi), Balanced, Stable
 - **Quality** setting (Standard / High / Very High / Max) - video bitrate; the connection test picks the highest your link carries
 - **Split Windows**: two independent windows you can move, resize (aspect-locked) and capture separately; closing one recombines them
 - **Fit to Monitor**: maximise the window, or stack split windows as large as possible
@@ -29,7 +29,7 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 - Reorganised control panel (View / Aspect / Audio & Stream / Tools / Profiles / Settings); manual position sliders, size slider and layout presets replaced by the self-fitting stage and Profiles
 - Mouse wheel no longer changes slider values (it moved the volume while scrolling the panel)
 - Window size and position are remembered between launches
-- Changing FPS / audio restarts just the streams, not the whole app
+- Changing FPS / audio / quality restarts just the streams, not the whole app - once, shortly after the last change
 - Wi-Fi bitrate is tied to the Latency setting (Balanced/Stable use less bandwidth if audio warps)
 - On exit the wireless connection is dropped and the bundled adb server is shut down (no more piled-up adb.exe)
 - scrcpy and adb are tied to DualCPY with a Windows job object, so they always close with it - even after a crash
