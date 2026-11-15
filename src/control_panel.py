@@ -445,12 +445,45 @@ class CTkUI:
                    "takes the game's shape. Instant, never restarts the stream. Scroll the console "
                    "list sideways with the mouse wheel or by dragging.\n" + CONSOLE_ACRONYMS + ".")
 
-        # -------------------------------------------------------- Audio & Stream
+        # -------------------------------------------------------- Stream
         self._separator()
-        self._section("Audio & Stream")
-        self._build_slider("volume", "Volume", self.l.volume, 0, 100,
-                           color=ACCENT_COLOUR, is_float=False,
-                           on_change=self._on_volume_change)
+        self._section("Stream")
+        from src.scrcpy_manager import QUALITY_MODES, QUALITY_LABELS
+        self._quality_label_to_key = {QUALITY_LABELS[k]: k for k in QUALITY_MODES}
+        self._quality_var = self._dropdown(
+            self._scroll, "Quality", [QUALITY_LABELS[k] for k in QUALITY_MODES],
+            QUALITY_LABELS.get(self.l.quality, "High"),
+            lambda v: self._on_stream_option("quality", self._quality_label_to_key[v]))
+        self._fps_var = self._dropdown(
+            self._scroll, "Top FPS", [fps_label(v) for v in ALLOWED_FPS_VALUES],
+            fps_label(self.l.max_fps), self._on_fps_change)
+        self._bottom_fps_var = self._dropdown(
+            self._scroll, "Bottom FPS", ["Same as top", "30 FPS"],
+            "30 FPS" if self.l.bottom_fps == 30 else "Same as top",
+            lambda v: self._on_stream_option("bottom_fps", 30 if v.startswith("30") else 0))
+        test_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        test_row.pack(fill="x", padx=16, pady=(4, 0))
+        test_row.columnconfigure(0, weight=1)
+        test_row.columnconfigure(1, weight=1)
+        self._button(test_row, "Test Connection & Auto-Set", self._on_link_test, accent=True)             .grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self._button(test_row, "Restart Streams", self._on_restart)             .grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self._link_result = ctk.CTkLabel(self._scroll, text="", font=make_font(12),
+                                         text_color=TEXT_COLOUR, anchor="w", justify="left",
+                                         wraplength=400)
+        self._link_test_row = test_row  # result label is only shown once there is a result
+        self._hint("Quality - how much detail is sent per second (bitrate): higher = sharper fast "
+                   "motion and dark scenes, but needs more bandwidth. Max suits USB / fast Wi-Fi.\n"
+                   "Top FPS - 120 (experimental) needs a 120 Hz+ monitor and a game running at 120; "
+                   "it uses ~1.5x the bandwidth. OBS still records at its own rate (usually 60).\n"
+                   "Bottom FPS - 30 frees the Thor's GPU for the top screen when the bottom is "
+                   "mostly menus (3DS, many Android games); keep 'Same' for DS games.\n"
+                   "Test Connection checks the Wi-Fi between the handheld and this PC (your internet "
+                   "speed doesn't matter) and sets Quality and Latency for you (~10 s).\n"
+                   "Changing these restarts the streams (a second or two).")
+
+        # -------------------------------------------------------- Audio
+        self._separator()
+        self._section("Audio")
         self._audio_var = self._dropdown(
             self._scroll, "Audio output", [AUDIO_MODE_LABELS[k] for k in AUDIO_MODES],
             AUDIO_MODE_LABELS.get(self.l.audio_mode, "PC"),
@@ -459,44 +492,12 @@ class CTkUI:
             self._scroll, "Latency", [AUDIO_LATENCY_LABELS[k] for k in AUDIO_LATENCY_MODES],
             AUDIO_LATENCY_LABELS.get(self.l.audio_latency, "Low"),
             lambda v: self._on_stream_option("audio_latency", self._latency_label_to_key[v]))
-        from src.scrcpy_manager import QUALITY_MODES, QUALITY_LABELS
-        self._quality_label_to_key = {QUALITY_LABELS[k]: k for k in QUALITY_MODES}
-        self._quality_var = self._dropdown(
-            self._scroll, "Quality", [QUALITY_LABELS[k] for k in QUALITY_MODES],
-            QUALITY_LABELS.get(self.l.quality, "High"),
-            lambda v: self._on_stream_option("quality", self._quality_label_to_key[v]))
-        self._fps_var = self._dropdown(
-            self._scroll, "Frame rate", [fps_label(v) for v in ALLOWED_FPS_VALUES],
-            fps_label(self.l.max_fps), self._on_fps_change)
-        self._bottom_fps_var = self._dropdown(
-            self._scroll, "Bottom FPS", ["Same as top", "30 FPS"],
-            "30 FPS" if self.l.bottom_fps == 30 else "Same as top",
-            lambda v: self._on_stream_option("bottom_fps", 30 if v.startswith("30") else 0))
+        self._build_slider("volume", "Volume", self.l.volume, 0, 100,
+                           color=ACCENT_COLOUR, is_float=False,
+                           on_change=self._on_volume_change)
         self._hint("Audio output - PC, Device (sound stays on the handheld) or Both (Android 13+).\n"
-                   "Latency - Low: smallest delay, full quality (USB / strong Wi-Fi). If sound warps "
-                   "or crackles, try Balanced, then Stable.\n"
-                   "Quality - how much detail is sent per second (bitrate): higher = sharper fast "
-                   "motion and dark scenes, but needs more bandwidth. Max suits USB / fast Wi-Fi.\n"
-                   "Frame rate - 120 FPS (experimental) needs a 120 Hz+ monitor and a game running at "
-                   "120; it uses ~1.5x the bandwidth. OBS still records at its own rate (usually 60).\n"
-                   "Bottom FPS - 30 frees the Thor's GPU for the top screen when the bottom is "
-                   "mostly menus (3DS, many Android games); keep 'Same' for DS games.\n"
-                   "Changing these restarts the streams (a second or two).")
-        test_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        test_row.pack(fill="x", padx=16, pady=(4, 0))
-        test_row.columnconfigure(0, weight=1)
-        test_row.columnconfigure(1, weight=1)
-        self._button(test_row, "Test Connection & Auto-Set", self._on_link_test, accent=True) \
-            .grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        self._button(test_row, "Restart Streams", self._on_restart) \
-            .grid(row=0, column=1, sticky="ew", padx=(4, 0))
-        self._link_result = ctk.CTkLabel(self._scroll, text="", font=make_font(12),
-                                         text_color=TEXT_COLOUR, anchor="w", justify="left",
-                                         wraplength=400)
-        self._link_test_row = test_row  # result label is only shown once there is a result
-        self._hint("Tests the Wi-Fi between the handheld and this PC (your internet speed doesn't "
-                   "matter - the stream never leaves your home network) and picks the lowest Latency "
-                   "setting that keeps audio clean. Takes ~10 seconds.")
+                   "Latency - Low: smallest delay (USB / strong Wi-Fi). If sound warps or crackles, "
+                   "try Balanced, then Stable. Changing output or latency restarts the streams.")
 
         # -------------------------------------------------------- Tools
         self._separator()

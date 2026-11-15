@@ -1362,6 +1362,11 @@ class Launcher:
             self.overlay_strips = strips
             with self._overlay_lock:
                 self._overlay_bitmaps = {}
+            # Repaint the whole stage background so strips that are no longer
+            # wanted (overlay switched off, view changed) are wiped to black -
+            # previously they lingered until something else forced a repaint
+            if self.hwnd_container:
+                self.user32.InvalidateRect(self.hwnd_container, None, True)
             self._overlay_dirty.set()
 
     def _overlay_loop(self):

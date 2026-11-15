@@ -47,7 +47,8 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 - Ctrl+Alt+M could hide the panel instead of showing it while fullscreen
 - Fullscreen / Split buttons are highlighted only while active
 - Control panel opens flush against the stage (measures the visible frame, not Windows' invisible borders)
-- Tidier control panel: one row of mode buttons; experimental options (controller overlay, renderer) moved to Settings
+- Tidier control panel: one row of mode buttons; separate Stream (Quality, Top FPS, Bottom FPS, test/restart) and Audio (output, latency, volume) sections; experimental options (controller overlay, renderer) in Settings
+- Switching the controller overlay off now clears the strips immediately (they lingered until the view changed)
 - USB audio buffer raised to 60 ms + 15 ms output (30 ms clicked on dense music - measured by scrcpy-thor-ui)
 - Screenshot button could crash the app (replaced dxcam with Windows screen capture; works on any monitor)
 - Overlapping stream restarts could orphan scrcpy processes that kept playing audio in the background
