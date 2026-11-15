@@ -430,6 +430,13 @@ class CTkUI:
         self._aspect_rows = {}
         self._aspect_row("top", "Top", list(ASPECT_PRESETS.keys()))
         self._aspect_row("bottom", "Bottom", list(ASPECT_PRESETS.keys()))
+        ctk.CTkButton(
+            self._scroll, text="Default (both Full)", width=150, height=26,
+            command=self._on_aspect_default,
+            fg_color=PANEL_COLOUR, hover_color=BORDER_COLOUR,
+            border_color=BORDER_COLOUR, border_width=1,
+            text_color=TEXT_COLOUR, font=make_font(12),
+        ).pack(anchor="w", padx=16, pady=(6, 2))
         self._hint("Pick the ratio of what you're playing to cut the black bars - the screen then "
                    "takes the game's shape. Instant, never restarts the stream. Scroll the console "
                    "list sideways with the mouse wheel or by dragging.\n" + CONSOLE_ACRONYMS + ".")
@@ -729,6 +736,14 @@ class CTkUI:
         if self._volume_save_after:
             self.window.after_cancel(self._volume_save_after)
         self._volume_save_after = self.window.after(600, self.l.save_volume)
+
+    def _on_aspect_default(self):
+        """Both screens back to the full, uncropped picture"""
+        from src.scrcpy_manager import FULL_SCREEN_LABEL
+        for key in ("top", "bottom"):
+            self.l.set_crop(key, self.l.scrcpy.preset_crop(key, FULL_SCREEN_LABEL), FULL_SCREEN_LABEL)
+            self._set_aspect_display(key, FULL_SCREEN_LABEL)
+        self.show_status("Both screens: full (no crop)", "success")
 
     def _on_aspect(self, key, name):
         crop = self.l.scrcpy.preset_crop(key, name)
