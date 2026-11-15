@@ -231,6 +231,10 @@ def main():
     except Exception as PriorityErr:
         logger.warning(f"Could not raise host process priority: {PriorityErr}")
 
+    # Make sure scrcpy/adb always die with us, even after a crash
+    from src import process_guard
+    process_guard.init()
+
     # Create the main launcher object and start it
     logger.info("Initializing launcher")
     app = Launcher()

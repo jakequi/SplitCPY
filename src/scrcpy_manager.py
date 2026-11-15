@@ -24,6 +24,7 @@ import ctypes
 import logging
 import subprocess
 from src.device_detection import resolve_adb
+from src import process_guard
 
 # Setup logger for this module
 logger = logging.getLogger(__name__)
@@ -90,6 +91,17 @@ AUDIO_BUFFER_MS = {
 }
 AUDIO_BIT_RATE = "128K"
 
+FULL_CROP = (0.0, 0.0, 1.0, 1.0)
+
+
+def valid_crop(crop):
+    try:
+        l, t, r, b = (float(c) for c in crop)
+        return 0 <= l < r <= 1 and 0 <= t < b <= 1 and (r - l) > 0.05 and (b - t) > 0.05
+    except Exception:
+        return False
+
+
 # Aspect-ratio crop presets: name -> width/height (None = full screen)
 ASPECT_PRESETS = {
     "Full": None,
@@ -122,7 +134,7 @@ class ScrcpyManager:
     def __init__(self, profile, scale=None, scrcpy_bin=None,
                  adb_bin=None, enable_audio_top=True, max_fps=int(DEFAULT_MAX_FPS),
                  audio_mode="pc", audio_latency="auto",
-                 top_aspect="Full", bottom_aspect="Full"):
+                 crops=None):
         """
         Initialize the scrcpy manager.
         """
@@ -138,15 +150,17 @@ class ScrcpyManager:
 
         self.audio_mode = audio_mode if audio_mode in AUDIO_MODES else "pc"
         self.audio_latency = audio_latency if audio_latency in AUDIO_LATENCY_MODES else "auto"
-        self.top_aspect = top_aspect if top_aspect in ASPECT_PRESETS else "Full"
-        self.bottom_aspect = bottom_aspect if bottom_aspect in ASPECT_PRESETS else "Full"
-
-        # Natural-orientation sizes per display id, filled lazily (for --crop)
-        self._natural_sizes = {}
+        # Visible region of each screen as (left, top, right, bottom) fractions
+        # of the full frame. Applied on the PC side (viewport), so changing it
+        # never restarts the stream.
+        self.crops = {"top": FULL_CROP, "bottom": FULL_CROP}
+        for key, crop in (crops or {}).items():
+            if key in self.crops and valid_crop(crop):
+                self.crops[key] = tuple(float(c) for c in crop)
 
         logger.info(
             f"Initializing ScrcpyManager (scale={self.scale}, audio={self.audio_mode}/"
-            f"{self.audio_latency}, fps={max_fps}, aspect={self.top_aspect}/{self.bottom_aspect})"
+            f"{self.audio_latency}, fps={max_fps}, crops={self.crops})"
         )
 
         self.f_w1 = self.f_h1 = self.f_w2 = self.f_h2 = 0
@@ -199,14 +213,31 @@ class ScrcpyManager:
         full_w1 = p.top_screen_width * scale
         full_w2 = full_w1 * p.get_screen_width_ratio()
 
-        cw1, ch1 = self._crop_size(p.top_screen_width, p.top_screen_height, self.top_aspect)
-        cw2, ch2 = self._crop_size(p.bottom_screen_width, p.bottom_screen_height, self.bottom_aspect)
+        l1, t1, r1, b1 = self.crops["top"]
+        l2, t2, r2, b2 = self.crops["bottom"]
+        cw1, ch1 = p.top_screen_width * (r1 - l1), p.top_screen_height * (b1 - t1)
+        cw2, ch2 = p.bottom_screen_width * (r2 - l2), p.bottom_screen_height * (b2 - t2)
 
-        w1 = full_w1 * cw1 / p.top_screen_width
+        w1 = full_w1 * (r1 - l1)
         h1 = w1 * ch1 / cw1
-        w2 = full_w2 * cw2 / p.bottom_screen_width
+        w2 = full_w2 * (r2 - l2)
         h2 = w2 * ch2 / cw2
         return w1, h1, w2, h2
+
+    def full_aspect(self, key):
+        p = self.profile
+        if key == "top":
+            return p.top_screen_width / p.top_screen_height
+        return p.bottom_screen_width / p.bottom_screen_height
+
+    def preset_crop(self, key, aspect_name):
+        """Centred crop fractions for an aspect preset ("Full", "4:3", ...)"""
+        p = self.profile
+        w, h = ((p.top_screen_width, p.top_screen_height) if key == "top"
+                else (p.bottom_screen_width, p.bottom_screen_height))
+        cw, ch = self._crop_size(w, h, aspect_name)
+        fx, fy = (1 - cw / w) / 2, (1 - ch / h) / 2
+        return (fx, fy, 1 - fx, 1 - fy)
 
     def set_scale(self, scale):
         """Recompute window sizes for a new scale. Takes effect immediately."""
@@ -218,49 +249,6 @@ class ScrcpyManager:
             f"Window sizes at scale {scale}: top {self.f_w1}x{self.f_h1}, "
             f"bottom {self.f_w2}x{self.f_h2}"
         )
-
-    def _natural_size(self, display_id):
-        """
-        Size of a display in its natural (rotation 0) orientation, from
-        `wm size -d`. scrcpy's --crop is expressed in natural orientation.
-        """
-        if display_id in self._natural_sizes:
-            return self._natural_sizes[display_id]
-        size = None
-        if self.adb_bin and self.serial:
-            try:
-                result = subprocess.run(
-                    [self.adb_bin, "-s", self.serial, "shell", "wm", "size", "-d", str(display_id)],
-                    capture_output=True, text=True, timeout=5,
-                    creationflags=CREATE_NO_WINDOW,
-                )
-                out = result.stdout or ""
-                m = (re.search(r"Override size:\s*(\d+)x(\d+)", out)
-                     or re.search(r"Physical size:\s*(\d+)x(\d+)", out))
-                if m:
-                    size = (int(m.group(1)), int(m.group(2)))
-            except Exception as e:
-                logger.warning(f"Could not read natural size of display {display_id}: {e}")
-        logger.info(f"Natural size of display {display_id}: {size}")
-        self._natural_sizes[display_id] = size
-        return size
-
-    def _crop_arg(self, display_id, width, height, aspect_name):
-        """Build a --crop flag for the aspect preset, or None for full screen."""
-        cw, ch = self._crop_size(width, height, aspect_name)
-        if (cw, ch) == (width, height):
-            return None
-        natural = self._natural_size(display_id)
-        if natural and (natural[0] > natural[1]) != (width > height):
-            # The display is rotated 90 degrees from its natural orientation:
-            # swap the (centred) crop rect into natural coordinates.
-            nw, nh = natural
-            cw, ch = ch, cw
-        else:
-            nw, nh = natural if natural else (width, height)
-        x = max(0, (nw - cw) // 2)
-        y = max(0, (nh - ch) // 2)
-        return f"--crop={cw}:{ch}:{x}:{y}"
 
     @property
     def is_wireless(self):
@@ -549,12 +537,12 @@ class ScrcpyManager:
         ]
         return args
 
-    def _screen_args(self, display_id, width, height, aspect_name, wireless_cap, custom_args):
+    def _screen_args(self, display_id, width, height, wireless_cap, custom_args):
         """
         Video args for one screen: the profile's custom args if set, otherwise
         defaults sized for the connection type. Returns (max_size, args).
         """
-        cw, ch = self._crop_size(width, height, aspect_name)
+        cw, ch = width, height
         max_size = max(cw, ch)
         if self.is_wireless:
             max_size = min(max_size, wireless_cap)
@@ -571,9 +559,6 @@ class ScrcpyManager:
             args = self.default_args(stream_w, stream_h, BITRATE_MIN_USB,
                                      BITRATE_MBPS_PER_MP_USB, enable_audio=False)
 
-        crop = self._crop_arg(display_id, width, height, aspect_name)
-        if crop:
-            args = [a for a in args if not a.startswith("--crop")] + [crop]
         return max_size, list(args)
 
     @staticmethod
@@ -645,7 +630,7 @@ class ScrcpyManager:
         self.serial = use_serial
         top_size, top_args = self._screen_args(
             profile.top_display_id, profile.top_screen_width, profile.top_screen_height,
-            self.top_aspect, WIRELESS_MAX_SIZE_TOP, profile.extra_scrcpy_args_top,
+            WIRELESS_MAX_SIZE_TOP, profile.extra_scrcpy_args_top,
         )
         top_args = top_args + self.audio_args() + ["--gamepad=uhid"]
         self._start_window(
@@ -677,7 +662,7 @@ class ScrcpyManager:
         logger.info("Starting bottom screen window")
         bottom_size, bottom_args = self._screen_args(
             profile.bottom_display_id, profile.bottom_screen_width, profile.bottom_screen_height,
-            self.bottom_aspect, WIRELESS_MAX_SIZE_BOTTOM, profile.extra_scrcpy_args_bottom,
+            WIRELESS_MAX_SIZE_BOTTOM, profile.extra_scrcpy_args_bottom,
         )
         bottom_args = bottom_args + ["--no-audio", "--gamepad=disabled"]
         self._start_window(
@@ -788,6 +773,7 @@ class ScrcpyManager:
                     stderr=stderr_target,
                     env=child_env,
                 )
+                process_guard.adopt(proc)
 
                 # Quick check if process survives startup
                 time.sleep(SCRCPY_CREATION_DELAY)

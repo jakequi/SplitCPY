@@ -5,9 +5,11 @@
 Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 
 ### Added
+- **Detect Game Area**: finds the game's picture and crops the black bars away exactly (4:3, integer-scaled, anything) - per screen or both
+- Aspect crop is done on the PC side, so changing it is instant and never restarts the stream
 - **Fit to Monitor**: one click makes both screens as large as possible, stacked and centred on the current monitor (works combined and split)
 - **Split Windows**: two fully independent windows you can move, resize and capture separately; positions are remembered across stream restarts
-- **Per-screen aspect crop** (Full / 16:10 / 5:3 / 3:2 / 4:3): crops the black bars so a 4:3 game gets a 4:3 window
+- **Per-screen aspect presets** (Full / 16:10 / 5:3 / 3:2 / 4:3)
 - **Audio output** setting: PC, Device (keep sound on the handheld) or Both (Android 13+)
 - **Audio latency** setting: Auto / Low / Stable
 - Auto-reconnect when a stream drops (up to 3 attempts)
@@ -20,9 +22,13 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 - Changing FPS / audio / aspect restarts just the streams automatically, not the whole app
 - Reorganised control panel into Screens / Position / Stream / Tools / Presets with short explanations
 - Position values typed in the boxes are no longer clamped
-- On exit, only DualCPY's own scrcpy processes are closed, and the bundled adb server is shut down (no more piled-up adb.exe)
+- On exit the wireless connection is dropped and the bundled adb server is shut down (no more piled-up adb.exe)
+- scrcpy and adb are tied to DualCPY with a Windows job object, so they always close with it - even after a crash
+- Closing a split window puts the screens back together instead of killing the stream
 
 ### Bugfixes
+- Screenshot button could crash the app (replaced dxcam capture with Windows screen capture; also works across monitors)
+- Overlapping stream restarts could orphan scrcpy processes that kept playing audio in the background
 - Status messages disappeared after the first one
 - Running from source crashed on an incorrect `ui_constants` import
 - Wireless-debugging (mDNS) serials weren't recognised as wireless

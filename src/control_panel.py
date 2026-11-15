@@ -20,13 +20,12 @@
 import os
 import sys
 import time
-import dxcam
 import ctypes
 import logging
 import win32clipboard
 import tkinter as tk
 import customtkinter as ctk
-from PIL import Image
+from PIL import Image, ImageGrab
 from io import BytesIO
 from ctypes import windll, wintypes
 
@@ -40,6 +39,7 @@ from src.ui_constants import (
     resource_path, load_calsans, make_font, apply_window_icon,
 )
 from src.device_profile_editor import DeviceProfileEditorDialog
+from src.crop_detect import detect_content, FULL_CROP
 
 logger = logging.getLogger(__name__)
 
@@ -237,8 +237,6 @@ class CTkUI:
 
         self._build_ui()
 
-        # For screenshots
-        self._dxcam = dxcam.create(output_color="BGRA")
 
         # Making sure titlebar is dark
         try:
@@ -379,12 +377,24 @@ class CTkUI:
         aspects = list(ASPECT_PRESETS.keys())
         self._top_aspect_var = self._dropdown(
             self._scroll, "Top aspect", aspects, self.l.top_aspect,
-            lambda v: self._on_stream_option("top_aspect", v))
+            lambda v: self._on_aspect("top", v))
         self._bottom_aspect_var = self._dropdown(
             self._scroll, "Bottom aspect", aspects, self.l.bottom_aspect,
-            lambda v: self._on_stream_option("bottom_aspect", v))
-        self._hint("Pick 4:3 (etc.) to crop the black bars when a game doesn't fill the screen - "
-                   "the window then takes the game's shape.")
+            lambda v: self._on_aspect("bottom", v))
+
+        det = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        det.pack(fill="x", padx=16, pady=(4, 2))
+        det.columnconfigure(0, weight=1)
+        det.columnconfigure(1, weight=1)
+        self._button(det, "Detect Game Area", self._on_detect_both, accent=True) \
+            .grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
+        self._button(det, "Detect Top", lambda: self._on_detect(["top"])) \
+            .grid(row=1, column=0, sticky="ew", padx=(0, 4))
+        self._button(det, "Detect Bottom", lambda: self._on_detect(["bottom"])) \
+            .grid(row=1, column=1, sticky="ew", padx=(4, 0))
+        self._hint("Detect Game Area finds the game's picture and crops away the black bars exactly "
+                   "(works for 4:3, integer-scaled, anything). Run it again when you change game. "
+                   "Aspect presets crop a centred area instantly. Neither restarts the stream.")
 
         # -------------------------------------------------------- Position
         self._separator()
@@ -637,8 +647,56 @@ class CTkUI:
         if new_scale <= 0 or abs(new_scale - (self.l.global_scale or 0)) < 0.005:
             return
         # Applies instantly - no restart needed any more
+        self.l._fitted = False
         self.l.set_scale_live(new_scale, keep_positions=True)
         self._sync_sliders_from_launcher(skip=("global_scale",))
+
+    def _on_aspect(self, key, name):
+        crop = self.l.scrcpy.preset_crop(key, name)
+        if self.l.set_crop(key, crop, name):
+            self._sync_sliders_from_launcher()
+            self.show_status(f"{key.title()} screen: {name}", "success")
+
+    def _on_detect_both(self):
+        self._on_detect(["top", "bottom"])
+
+    def _on_detect(self, keys):
+        """Show the full frame briefly, capture it, find the picture, crop to it"""
+        if not (self.l.dock.hwnd_top or self.l.dock.hwnd_bottom):
+            self.show_status("Streams aren't running yet", "error")
+            return
+        self.show_status("Detecting game area...", "info")
+        self.l.bring_to_front(None if self.l.docked else keys[0])
+        for key in keys:
+            if not self.l.docked:
+                self.l.bring_to_front(key)
+            self.l.show_full_frame(key)
+        # Give scrcpy a moment to redraw at the new size
+        self.window.after(450, lambda: self._finish_detect(keys))
+
+    def _finish_detect(self, keys):
+        results = []
+        for key in keys:
+            crop = None
+            try:
+                rect = self.l.capture_rect(key)
+                if rect and rect[2] > rect[0] and rect[3] > rect[1]:
+                    img = ImageGrab.grab(bbox=rect, all_screens=True)
+                    crop = detect_content(img, self.l.scrcpy.full_aspect(key))
+            except Exception as e:
+                logger.error(f"Detection failed for {key}: {e}", exc_info=True)
+            self.l.restore_crop_view(key)
+            if crop is None:
+                results.append(f"{key}: no picture found")
+                continue
+            name = "Full" if crop == FULL_CROP else "Detected"
+            self.l.set_crop(key, crop, name)
+            l, t, r, b = crop
+            w = (r - l) * self.l.scrcpy.full_aspect(key)
+            results.append(f"{key}: {name}" + ("" if name == "Full" else f" ({w / (b - t):.2f}:1)"))
+        self._sync_sliders_from_launcher()
+        ok = all("no picture" not in r for r in results)
+        self.show_status("Detect - " + ", ".join(results), "success" if ok else "warning", duration=5.0)
 
     def _on_fit_to_monitor(self):
         scale = self.l.fit_to_monitor()
@@ -654,6 +712,7 @@ class CTkUI:
         defaults = self.l.get_default_layout()
         for attr, val in defaults.items():
             self.l.__dict__[attr] = val
+        self.l._fitted = False
         self.l.save_layout()
         self.l._resize_container_window()
         self._sync_sliders_from_launcher()
@@ -665,6 +724,7 @@ class CTkUI:
             ref = self._slider_refs.get(attr)
             if ref:
                 setattr(self.l, attr, int(ref["real"].get()))
+        self.l._fitted = False
         self.l.save_layout()
         self.l._resize_container_window()
         self.force_window_sync()
@@ -904,112 +964,50 @@ class CTkUI:
         )
 
     def force_window_sync(self):
-        """
-        Force an immediate dock sync, bypassing the throttle inside Win32Dock
-        """
+        """Immediately re-apply the combined-window layout"""
         try:
-            if not self.l.docked:
-                logger.debug("Skipping force sync - not docked")
-                return
-            if not (self.l.dock.hwnd_top and self.l.dock.hwnd_bottom):
-                logger.warning("Cannot force sync - window handles not available")
-                return
-
-            self.l.dock._last_sync = 0
-
-            user32 = windll.user32
-            user32.ShowWindow(self.l.dock.hwnd_top,    SW_SHOW)
-            user32.ShowWindow(self.l.dock.hwnd_bottom, SW_SHOW)
-
-            self.l.dock.sync(
-                self.l.tx, self.l.ty,
-                self.l.bx, self.l.by,
-                self.l.scrcpy.f_w1, self.l.scrcpy.f_h1,
-                self.l.scrcpy.f_w2, self.l.scrcpy.f_h2,
-                is_docked=True,
-            )
-
-            flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE
-            user32.SetWindowPos(self.l.dock.hwnd_top,    0, 0, 0, 0, 0, flags)
-            user32.SetWindowPos(self.l.dock.hwnd_bottom, 0, 0, 0, 0, 0, flags)
-
-            logger.info("Force window sync completed")
-
+            self.l.layout_windows(force=True)
         except Exception as e:
             logger.error(f"Force window sync error: {e}", exc_info=True)
 
-    def _grab_client(self, hwnd):
-        """Capture one window's client area as a PIL image (or None)"""
-        if not hwnd:
-            return None
+    def _grab_rect(self, rect):
+        """Capture a screen rect (any monitor) as a PIL image, or None"""
         try:
-            user32 = ctypes.windll.user32
-            rc = wintypes.RECT()
-            user32.GetClientRect(hwnd, ctypes.byref(rc))
-            pt = wintypes.POINT(0, 0)
-            user32.ClientToScreen(hwnd, ctypes.byref(pt))
-            region = (pt.x, pt.y, pt.x + rc.right, pt.y + rc.bottom)
-            frame = None
-            # dxcam returns None when nothing changed since the last grab
-            for _ in range(20):
-                frame = self._dxcam.grab(region=region)
-                if frame is not None:
-                    break
-                time.sleep(0.02)
-            if frame is None:
+            if not rect or rect[2] <= rect[0] or rect[3] <= rect[1]:
                 return None
-            return Image.fromarray(frame[:, :, [2, 1, 0]])
+            return ImageGrab.grab(bbox=rect, all_screens=True).convert("RGB")
         except Exception as e:
-            logger.warning(f"Window capture failed: {e}")
+            logger.warning(f"Screen capture failed: {e}")
             return None
 
     def take_screenshot(self):
         try:
-            user32 = ctypes.windll.user32
-            client_rect = wintypes.RECT()
-
-            user32.GetClientRect(
-                self.l.hwnd_container,
-                ctypes.byref(client_rect)
-            )
-
-            pt = wintypes.POINT(0, 0)
-
-            user32.ClientToScreen(
-                self.l.hwnd_container,
-                ctypes.byref(pt)
-            )
-
-            left = pt.x
-            top = pt.y
-            right = left + client_rect.right
-            bottom = top + client_rect.bottom
-
-            logger.info(
-                f"Capturing client region: "
-                f"{left}, {top}, {right}, {bottom}"
-            )
-
             if self.l.docked:
-                img = self._grab_client(self.l.hwnd_container)
+                self.l.bring_to_front(None)
+                self.window.update()
+                img = self._grab_rect(self.l.capture_rect(None))
                 if img is None:
-                    logger.error("dxcam returned no frame")
-                    self.show_status("Screenshot failed - is the window on the main monitor?", "error")
+                    self.show_status("Screenshot failed - is the window visible?", "error")
                     return
             else:
                 # Split mode: capture each window and stack them like the
                 # combined layout (top centred over bottom)
-                shots = [self._grab_client(h) for h in (self.l.dock.hwnd_top, self.l.dock.hwnd_bottom)]
-                shots = [s for s in shots if s is not None]
+                shots = []
+                for key in ("top", "bottom"):
+                    self.l.bring_to_front(key)
+                    self.window.update()
+                    shot = self._grab_rect(self.l.capture_rect(key))
+                    if shot is not None:
+                        shots.append(shot)
                 if not shots:
-                    self.show_status("Screenshot failed - are both windows on screen?", "error")
+                    self.show_status("Screenshot failed - are the windows visible?", "error")
                     return
-                width = max(s.width for s in shots)
-                img = Image.new("RGB", (width, sum(s.height for s in shots)), (0, 0, 0))
+                width = max(im.width for im in shots)
+                img = Image.new("RGB", (width, sum(im.height for im in shots)), (0, 0, 0))
                 y = 0
-                for s in shots:
-                    img.paste(s, ((width - s.width) // 2, y))
-                    y += s.height
+                for im in shots:
+                    img.paste(im, ((width - im.width) // 2, y))
+                    y += im.height
 
             output = BytesIO()
             img.convert("RGB").save(output, "BMP")
@@ -1091,17 +1089,13 @@ class CTkUI:
             if not self.l.running:
                 return
 
-            # Sync scrcpy window positions (combined mode only - in split
-            # mode the user owns the window positions)
-            if self.l.docked and not self.l._restarting and (
-                    self.l.dock.hwnd_top or self.l.dock.hwnd_bottom):
-                self.l.dock.sync(
-                    self.l.tx, self.l.ty,
-                    self.l.bx, self.l.by,
-                    self.l.scrcpy.f_w1, self.l.scrcpy.f_h1,
-                    self.l.scrcpy.f_w2, self.l.scrcpy.f_h2,
-                    is_docked=self.l.docked,
-                )
+            # A split window was closed -> put the screens back together
+            if self.l._request_dock and not self.l.docked:
+                self._on_dock_toggle()
+
+            # Keep the combined layout applied (cached; cheap when unchanged)
+            if self.l.docked:
+                self.l.layout_windows()
 
             # Keep dock button label in sync with actual state
             expected = self._dock_label()

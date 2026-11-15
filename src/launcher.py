@@ -39,10 +39,10 @@ from src.device_selector import show_device_selector
 from src.custom_profile_store import CustomProfileStore
 from src.control_panel import show_loading_screen, CTkUI
 from src.device_profile_editor import DeviceProfileEditorDialog
-from src.win32_dock import (
-    Win32Dock, apply_docked_style, apply_undocked_style,
-    monitor_work_area, frame_insets, set_client_rect,
-)
+from src.win32_dock import Win32Dock, monitor_work_area, frame_insets
+from src.viewport import ViewportManager, FULL_CROP
+from src.scrcpy_manager import valid_crop
+from src import process_guard
 from src.device_detection import detect_device, resolve_adb, get_device_info, get_display_list
 from src.ui_constants import resource_path
 
@@ -128,14 +128,29 @@ class Launcher:
         # Stream options (applied by restarting the streams)
         self.audio_mode = self.config.get("audio_mode", "pc")
         self.audio_latency = self.config.get("audio_latency", "auto")
+        # Visible region of each screen (PC-side crop, no restart needed)
         self.top_aspect = self.config.get("top_aspect", "Full")
         self.bottom_aspect = self.config.get("bottom_aspect", "Full")
+        self.crops = {}
+        for key in ("top", "bottom"):
+            crop = self.config.get(f"{key}_crop", None)
+            if crop and valid_crop(crop):
+                self.crops[key] = tuple(crop)
+            else:
+                # Older config: aspect name without a crop region -> start full
+                self.crops[key] = FULL_CROP
+                setattr(self, f"{key}_aspect", "Full")
 
         # Stream restart / auto-reconnect state
         self._restarting = False
         self._reconnect_attempts = 0
         self._last_reconnect = 0.0
-        self._split_rects = None
+
+        # True after "Fit to Monitor" until the user resizes/moves manually,
+        # so crop changes re-fit automatically
+        self._fitted = False
+        # Set from the viewport thread when a split window is closed
+        self._request_dock = False
 
         # Layout attributes
         self.scrcpy = None
@@ -152,6 +167,10 @@ class Launcher:
 
         # Initialise window management
         self.dock = Win32Dock()
+        self.viewports = ViewportManager(
+            on_focus=lambda hwnd: self.dock.force_focus(hwnd),
+            on_close_request=self._on_split_window_closed,
+        )
         self.running = False
         self.docked = True
         self.hwnd_container = None
@@ -225,8 +244,7 @@ class Launcher:
             max_fps=self.max_fps,
             audio_mode=self.audio_mode,
             audio_latency=self.audio_latency,
-            top_aspect=self.top_aspect,
-            bottom_aspect=self.bottom_aspect,
+            crops=self.crops,
         )
 
     def _apply_default_layout(self):
@@ -337,20 +355,6 @@ class Launcher:
                     self.dock.force_focus(self.dock.hwnd_bottom)
                 return MA_ACTIVATE
 
-            # This is the ONLY place focus should be handled
-            if msg == WM_PARENTNOTIFY:
-                if (wp & 0xFFFF) == WM_LBUTTONDOWN:
-                    mx = lp & 0xFFFF
-                    my = (lp >> 16) & 0xFFFF
-
-                    if (self.tx <= mx <= self.tx + self.scrcpy.f_w1 and
-                            self.ty <= my <= self.ty + self.scrcpy.f_h1):
-                        self.dock.force_focus(self.dock.hwnd_top)
-
-                    elif (self.bx <= mx <= self.bx + self.scrcpy.f_w2 and
-                          self.by <= my <= self.by + self.scrcpy.f_h2):
-                        self.dock.force_focus(self.dock.hwnd_bottom)
-
             return self.user32.DefWindowProcW(hwnd, msg, wp, lp)
 
         return WNDPROC(py_wndproc)
@@ -438,7 +442,8 @@ class Launcher:
                 child_env.pop(key, None)
 
             logger.info(f"Restarting application: {' '.join(cmd)}")
-            subprocess.Popen(cmd, cwd=project_root, env=child_env)
+            subprocess.Popen(cmd, cwd=project_root, env=child_env,
+                             creationflags=process_guard.breakaway_flags())
 
         except Exception as e:
             logger.error(f"Failed to spawn restart process: {e}", exc_info=True)
@@ -582,6 +587,15 @@ class Launcher:
                 # Enable the dark titlebar
                 enable_dark_titlebar(hwnd)
 
+                # Viewport windows that hold (and crop) the two scrcpy windows.
+                # Created on this thread so this message loop services them.
+                try:
+                    self.viewports.create(hwnd, hinst, hicon)
+                    self._update_viewport_meta()
+                    self.layout_windows(force=True)
+                except Exception as e:
+                    logger.error(f"Failed to create viewports: {e}", exc_info=True)
+
             # Run the message loop for the container window
             msg = wintypes.MSG()
             while self.running and self.user32.GetMessageW(
@@ -598,46 +612,129 @@ class Launcher:
 
     def _docking_monitor(self):
         """
-        Background thread to continuously montor and dock windows.
-        Searches for titles and automatically sets their parent to the container window and applies styling
+        Background thread: finds new scrcpy windows (they appear as top-level
+        windows) and moves them into their viewport. Once adopted they are
+        child windows, so FindWindowW no longer sees them - only fresh ones
+        after a (re)start are picked up.
         """
         while self.running:
-            with self.dock_lock:
-                if self.hwnd_container and self.docked and not self._restarting:
-                    # Find scrcpy windows by their titles
+            try:
+                if self.hwnd_container and self.viewports.ready():
                     top_title, bottom_title = self._window_titles
-                    topScr = self.user32.FindWindowW(None, top_title)
-                    bottomScr = self.user32.FindWindowW(None, bottom_title)
-
-                    # Dock top screen if found and not already docked
-                    if topScr and self.user32.GetParent(topScr) != self.hwnd_container:
-                        self.user32.SetParent(topScr, self.hwnd_container)
-                        apply_docked_style(topScr)
-                        self.dock.hwnd_top = topScr
-                        self.dock.invalidate_geom_cache()
-
-                    # Dock bottom screen if found and not already docked
-                    if bottomScr and self.user32.GetParent(bottomScr) != self.hwnd_container:
-                        self.user32.SetParent(bottomScr, self.hwnd_container)
-                        apply_docked_style(bottomScr)
-                        self.dock.hwnd_bottom = bottomScr
-                        self.dock.invalidate_geom_cache()
-
-                elif self.hwnd_container and not self.docked and not self._restarting:
-                    # Split mode: just track the (possibly new) window handles and
-                    # restore their previous placement after a stream restart
-                    top_title, bottom_title = self._window_titles
-                    topScr = self.user32.FindWindowW(None, top_title)
-                    bottomScr = self.user32.FindWindowW(None, bottom_title)
-                    if topScr and topScr != self.dock.hwnd_top:
-                        self.dock.hwnd_top = topScr
-                        self._place_split_window(topScr, "top")
-                    if bottomScr and bottomScr != self.dock.hwnd_bottom:
-                        self.dock.hwnd_bottom = bottomScr
-                        self._place_split_window(bottomScr, "bottom")
-
-            self._check_stream_health()
+                    with self.dock_lock:
+                        top = self.user32.FindWindowW(None, top_title)
+                        if top:
+                            self.viewports.adopt("top", top)
+                            self.dock.hwnd_top = top
+                        bottom = self.user32.FindWindowW(None, bottom_title)
+                        if bottom:
+                            self.viewports.adopt("bottom", bottom)
+                            self.dock.hwnd_bottom = bottom
+                self._check_stream_health()
+            except Exception as e:
+                logger.error(f"Docking monitor error: {e}", exc_info=True)
             time.sleep(DOCKING_MONITOR_TIME_DELAY)
+
+    # ------------------------------------------------------------------
+    # Viewport layout
+    # ------------------------------------------------------------------
+    def _update_viewport_meta(self):
+        """Push crop + titles for the current profile into the viewports"""
+        if not self.scrcpy:
+            return
+        for key in ("top", "bottom"):
+            self.viewports.set_crop(key, self.crops[key], self.scrcpy.full_aspect(key))
+        device = getattr(self, "device_model", None) or self.scrcpy.profile.name
+        self.viewports.set_titles(f"{device} | Top Screen", f"{device} | Bottom Screen")
+
+    def layout_windows(self, force=False):
+        """Place the viewports inside the container (combined mode)"""
+        if not self.scrcpy or self.tx is None or not self.viewports.ready():
+            return
+        if self.docked:
+            s = self.scrcpy
+            self.viewports.place_docked("top", self.tx, self.ty, s.f_w1, s.f_h1, force=force)
+            self.viewports.place_docked("bottom", self.bx, self.by, s.f_w2, s.f_h2, force=force)
+        elif force:
+            self.viewports.layout_inner("top", force=True)
+            self.viewports.layout_inner("bottom", force=True)
+
+    def _resize_split_windows(self):
+        s = self.scrcpy
+        self.viewports.resize_split("top", s.f_w1, s.f_h1)
+        self.viewports.resize_split("bottom", s.f_w2, s.f_h2)
+
+    def _on_split_window_closed(self):
+        # Called on the viewport thread; the UI loop performs the re-dock
+        self._request_dock = True
+
+    # ------------------------------------------------------------------
+    # Crop (aspect) - instant, never restarts the stream
+    # ------------------------------------------------------------------
+    def set_crop(self, key, crop, aspect_name):
+        """Show only `crop` (fractions of the full frame) of one screen"""
+        if not self.scrcpy or not valid_crop(crop):
+            return False
+        crop = tuple(round(float(c), 4) for c in crop)
+        was_default = (self.tx, self.ty, self.bx, self.by) == tuple(self.get_default_layout().values())
+
+        self.crops[key] = crop
+        setattr(self, f"{key}_aspect", aspect_name)
+        self.scrcpy.crops[key] = crop
+        self.viewports.set_crop(key, crop, self.scrcpy.full_aspect(key))
+        self.scrcpy.set_scale(self.scrcpy.scale)
+        try:
+            cfg = self.config.load()
+            cfg[f"{key}_crop"] = list(crop)
+            cfg[f"{key}_aspect"] = aspect_name
+            self.config.save(cfg)
+        except Exception as e:
+            logger.warning(f"Failed to persist crop: {e}")
+        logger.info(f"Crop {key} -> {aspect_name} {crop}")
+
+        if self._fitted:
+            self.fit_to_monitor()
+            return True
+        if was_default:
+            self._apply_default_layout()
+        if self.docked:
+            self._resize_container_window()
+            self.layout_windows(force=True)
+        else:
+            s = self.scrcpy
+            w, h = (s.f_w1, s.f_h1) if key == "top" else (s.f_w2, s.f_h2)
+            self.viewports.resize_split(key, w, h)
+        self.save_layout()
+        return True
+
+    def show_full_frame(self, key):
+        """Temporarily show the whole frame in a viewport (for detection)"""
+        self.viewports.layout_inner(key, crop=FULL_CROP, force=True)
+
+    def restore_crop_view(self, key):
+        self.viewports.layout_inner(key, force=True)
+
+    def capture_rect(self, key=None):
+        """Screen rect to capture: the container (combined) or one viewport"""
+        if key is None:
+            if not self.hwnd_container:
+                return None
+            rc = wintypes.RECT()
+            self.user32.GetClientRect(self.hwnd_container, ctypes.byref(rc))
+            pt = wintypes.POINT(0, 0)
+            self.user32.ClientToScreen(self.hwnd_container, ctypes.byref(pt))
+            return pt.x, pt.y, pt.x + rc.right, pt.y + rc.bottom
+        return self.viewports.client_screen_rect(key)
+
+    def bring_to_front(self, key=None):
+        """Raise the window being captured so nothing covers it"""
+        hwnd = self.hwnd_container if (self.docked or key is None) else self.viewports.views[key].hwnd
+        if not hwnd:
+            return
+        HWND_TOPMOST, HWND_NOTOPMOST = -1, -2
+        flags = 0x0001 | 0x0002 | 0x0010  # NOSIZE | NOMOVE | NOACTIVATE
+        self.user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+        self.user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags)
 
     # ------------------------------------------------------------------
     # Stream health / restart
@@ -653,15 +750,13 @@ class Launcher:
 
     def _check_stream_health(self):
         """
-        Auto-reconnect: if a scrcpy process dies (Wi-Fi blip, device sleep,
-        user closed a split window), restart the streams. Backs off after
-        a few failed attempts so we don't loop forever.
+        Auto-reconnect: if a scrcpy process dies (Wi-Fi blip, device sleep),
+        restart the streams. Backs off after a few failed attempts.
         """
         if self._restarting or not self.scrcpy or not self.scrcpy.processes:
             return
         dead = self.scrcpy._check_process_alive()
         if dead is None:
-            # Healthy for a while -> reset the attempt counter
             if time.time() - self._last_reconnect > 60:
                 self._reconnect_attempts = 0
             return
@@ -673,36 +768,16 @@ class Launcher:
         self._last_reconnect = time.time()
         logger.warning(f"A stream stopped - auto-reconnecting (attempt {self._reconnect_attempts}/3)")
         self._notify(f"Stream dropped - reconnecting ({self._reconnect_attempts}/3)...", "warning")
-        self.restart_streams(reset_layout=False)
+        self.restart_streams()
 
-    def _remember_split_rects(self):
-        """Store split-window client positions so a restart can restore them"""
-        rects = {}
-        for key, hwnd in (("top", self.dock.hwnd_top), ("bottom", self.dock.hwnd_bottom)):
-            if hwnd and self.user32.IsWindow(hwnd):
-                pt = wintypes.POINT(0, 0)
-                self.user32.ClientToScreen(hwnd, ctypes.byref(pt))
-                rects[key] = (pt.x, pt.y)
-        self._split_rects = rects or None
-
-    def _place_split_window(self, hwnd, key):
-        """Give a fresh split-mode window a title bar and its remembered spot"""
-        try:
-            pos = (self._split_rects or {}).get(key)
-            w, h = ((self.scrcpy.f_w1, self.scrcpy.f_h1) if key == "top"
-                    else (self.scrcpy.f_w2, self.scrcpy.f_h2))
-            if pos is None:
-                return
-            set_client_rect(hwnd, pos[0], pos[1], w, h)
-        except Exception as e:
-            logger.warning(f"Could not restore split window placement: {e}")
-
-    def restart_streams(self, reset_layout=False):
+    def restart_streams(self):
         """
         Restart both scrcpy streams in-process with the current settings
-        (FPS, audio, aspect). Much faster than restarting the whole app and
-        keeps the container window, control panel and split/dock state.
-        Runs in a background thread; safe to call from the UI thread.
+        (FPS, audio). Keeps the container, viewports (and so split-window
+        positions), crop and control panel. Runs in a background thread.
+        Only one restart can run at a time - a second request while one is
+        in progress is ignored (overlapping restarts used to orphan a pair
+        of scrcpy processes that kept playing audio).
         """
         if self._restarting or not self.scrcpy:
             return
@@ -710,15 +785,11 @@ class Launcher:
         if not serial:
             logger.error("restart_streams: no serial")
             return
-
         self._restarting = True
-        if not self.docked:
-            self._remember_split_rects()
 
         def worker():
             try:
                 old = self.scrcpy
-                old_size = (old.f_w1, old.f_h1, old.f_w2, old.f_h2)
                 try:
                     old.stop()
                 except Exception as e:
@@ -727,7 +798,7 @@ class Launcher:
                 with self.dock_lock:
                     self.dock.hwnd_top = None
                     self.dock.hwnd_bottom = None
-                    self.dock.invalidate_geom_cache()
+                    self.viewports.release_children()
 
                 new = self._make_manager(old.profile, self.global_scale or old.scale)
                 new.serial = serial
@@ -735,28 +806,20 @@ class Launcher:
                 new.adb_bin = old.adb_bin or new.adb_bin
                 self.scrcpy = new
 
-                if reset_layout or old_size != (new.f_w1, new.f_h1, new.f_w2, new.f_h2):
-                    self._apply_default_layout()
-
-                self._restarting = False
                 new.start_scrcpy(serial=serial)
-                self._resize_container_window()
-                self.save_layout()
                 self._notify("Streams restarted", "success")
-                ui = getattr(self, "ui", None)
-                if ui:
-                    ui.window.after(0, ui._sync_sliders_from_launcher)
             except Exception as e:
                 logger.error(f"Stream restart failed: {e}", exc_info=True)
                 self._notify("Stream restart failed - see logs", "error")
             finally:
+                self._last_reconnect = max(self._last_reconnect, time.time())
                 self._restarting = False
 
         threading.Thread(target=worker, daemon=True).start()
 
     def set_stream_option(self, key, value):
-        """Persist a stream option (audio_mode, audio_latency, top_aspect, bottom_aspect)
-        and restart the streams so it takes effect."""
+        """Persist an audio option (audio_mode, audio_latency) and restart the
+        streams so it takes effect."""
         if getattr(self, key, None) == value:
             return
         setattr(self, key, value)
@@ -765,7 +828,7 @@ class Launcher:
         except Exception as e:
             logger.warning(f"Failed to persist {key}: {e}")
         logger.info(f"Stream option {key} -> {value}; restarting streams")
-        self.restart_streams(reset_layout=key in ("top_aspect", "bottom_aspect"))
+        self.restart_streams()
 
     # ------------------------------------------------------------------
     # Live scaling / fit to monitor
@@ -787,29 +850,23 @@ class Launcher:
             self.bx, self.by = int(round(self.bx * k)), int(round(self.by * k))
         else:
             self._apply_default_layout()
-        self.dock.invalidate_geom_cache()
-        self._resize_container_window()
-        if not self.docked:
-            # Resize split windows in place, keeping their client top-left
-            for key, hwnd in (("top", self.dock.hwnd_top), ("bottom", self.dock.hwnd_bottom)):
-                if hwnd and self.user32.IsWindow(hwnd):
-                    pt = wintypes.POINT(0, 0)
-                    self.user32.ClientToScreen(hwnd, ctypes.byref(pt))
-                    w, h = ((self.scrcpy.f_w1, self.scrcpy.f_h1) if key == "top"
-                            else (self.scrcpy.f_w2, self.scrcpy.f_h2))
-                    set_client_rect(hwnd, pt.x, pt.y, w, h)
+        if self.docked:
+            self._resize_container_window()
+            self.layout_windows(force=True)
+        else:
+            self._resize_split_windows()
         self.save_scale()
 
     def fit_to_monitor(self):
         """
         Make both screens as large as possible on the current monitor, stacked
-        top-over-bottom and centred. Works docked (resizes/moves the
-        container) and in split mode (stacks the two windows).
+        top-over-bottom and centred. Works combined (resizes/moves the
+        container) and split (stacks the two windows).
         Returns the new scale, or None on failure.
         """
         if not self.scrcpy:
             return None
-        ref = self.hwnd_container if self.docked else (self.dock.hwnd_top or self.hwnd_container)
+        ref = self.hwnd_container if self.docked else self.viewports.views["top"].hwnd
         work = monitor_work_area(ref)
         if not work:
             return None
@@ -821,9 +878,7 @@ class Launcher:
             il, it, ir, ib = frame_insets(WS_OVERLAPPEDWINDOW, WS_EX_CONTROLPARENT)
             scale = min((avail_w - il - ir) / max(w1, w2), (avail_h - it - ib) / (h1 + h2))
         else:
-            style = (self.user32.GetWindowLongW(self.dock.hwnd_top, -16)
-                     if self.dock.hwnd_top else WS_OVERLAPPEDWINDOW)
-            il, it, ir, ib = frame_insets(style, 0)
+            il, it, ir, ib = frame_insets(WS_OVERLAPPEDWINDOW, 0)
             scale = min((avail_w - il - ir) / max(w1, w2), (avail_h - 2 * (it + ib)) / (h1 + h2))
         scale = max(0.1, round(scale - 0.0005, 3))
 
@@ -846,64 +901,44 @@ class Launcher:
             top_y = wt + (avail_h - outer_total) // 2 + it
             bottom_y = top_y + s.f_h1 + ib + it
             cx = wl + avail_w // 2
-            if self.dock.hwnd_top:
-                set_client_rect(self.dock.hwnd_top, cx - s.f_w1 // 2, top_y, s.f_w1, s.f_h1)
-            if self.dock.hwnd_bottom:
-                set_client_rect(self.dock.hwnd_bottom, cx - s.f_w2 // 2, bottom_y, s.f_w2, s.f_h2)
+            self.viewports.resize_split("top", s.f_w1, s.f_h1, cx - s.f_w1 // 2, top_y)
+            self.viewports.resize_split("bottom", s.f_w2, s.f_h2, cx - s.f_w2 // 2, bottom_y)
 
+        self._fitted = True
         self.save_layout()
         logger.info(f"Fit to monitor: scale {scale}, work area {work}")
         return scale
 
     def toggle_dock(self):
         """
-        Switches between docked and undocked mode
-        Updates window styles and visibility
+        Switch between combined (one window) and split (two windows).
+        The scrcpy windows never move between parents here - only their
+        viewports do - so the streams and crop are untouched.
         """
-        if not self.dock.hwnd_top or not self.dock.hwnd_bottom:
-            logger.warning("Cannot toggle dock: windows not available")
+        if not self.viewports.ready():
+            logger.warning("Cannot toggle dock: viewports not ready")
             return
 
-        # Use lock to prevent race condition with _docking_monitor
         with self.dock_lock:
             if self.docked:
-                # Undock windows
-                logger.info("Undocking windows")
+                logger.info("Splitting windows")
                 self.docked = False
-
-                apply_undocked_style(self.dock.hwnd_top)
-                apply_undocked_style(self.dock.hwnd_bottom)
+                self.viewports.to_split()
                 self.user32.ShowWindow(self.hwnd_container, SW_HIDE)
-
-                self.dock.invalidate_geom_cache()
-                logger.info("Windows undocked successfully")
+                self.layout_windows(force=True)
+                logger.info("Windows split")
             else:
-                # Dock windows in a container
-                logger.info("Docking windows")
+                logger.info("Combining windows")
                 self.user32.ShowWindow(self.hwnd_container, SW_SHOW)
-
-                top_title, bottom_title = self._window_titles
-
-                # Re-find window handles in case they became invalid after undocking
-                topScr = self.user32.FindWindowW(None, top_title)
-                bottomScr = self.user32.FindWindowW(None, bottom_title)
-
-                if not topScr or not bottomScr:
-                    logger.error("Failed to find scrcpy windows for re-docking")
-                    return
-
-                # Update handles to ensure they're current
-                self.dock.hwnd_top = topScr
-                self.dock.hwnd_bottom = bottomScr
-
-                self.user32.SetParent(self.dock.hwnd_top, self.hwnd_container)
-                self.user32.SetParent(self.dock.hwnd_bottom, self.hwnd_container)
-                apply_docked_style(self.dock.hwnd_top)
-                apply_docked_style(self.dock.hwnd_bottom)
-                self.dock.invalidate_geom_cache()
+                self.viewports.to_docked(self.hwnd_container)
                 self.docked = True
-
-                logger.info("Windows docked successfully")
+                self._resize_container_window()
+                self.layout_windows(force=True)
+                logger.info("Windows combined")
+        self._request_dock = False
+        # Keep "Fit to Monitor" in effect across split/combine
+        if self._fitted:
+            self.fit_to_monitor()
 
     def show_connection_dialog(self):
         """
@@ -1119,6 +1154,7 @@ class Launcher:
 
         # Stacked + centred default layout
         self._apply_default_layout()
+        self._update_viewport_meta()
 
         logger.info(
             f"Layout set: Top({self.tx}, {self.ty}), Bottom({self.bx}, {self.by}) "
@@ -1210,11 +1246,11 @@ class Launcher:
         except Exception as e:
             logger.warning(f"Error stopping scrcpy during profile switch: {e}")
 
-        # Clear stale dock handles - docking monitor will re-discover them
+        # Clear stale handles - docking monitor will adopt the new windows
         with self.dock_lock:
             self.dock.hwnd_top = None
             self.dock.hwnd_bottom = None
-            self.dock.invalidate_geom_cache()
+            self.viewports.release_children()
 
         # make a new ScrcpyManager with the new profile's default scale
         self.launch_scale = profile.default_ui_scale
@@ -1226,6 +1262,7 @@ class Launcher:
 
         # setup default centred layout
         self._apply_default_layout()
+        self._update_viewport_meta()
 
         logger.info(
             f"Profile switch layout: Top({self.tx},{self.ty}) "
@@ -1249,6 +1286,7 @@ class Launcher:
 
         self.save_layout()
         self._resize_container_window()
+        self.layout_windows(force=True)
 
         # Sync UI
         if hasattr(self, "ui") and self.ui:
@@ -1291,15 +1329,18 @@ class Launcher:
         # background and pile up across launches (upstream issue #11)
         try:
             adb_bin = getattr(self.scrcpy, "adb_bin", None) or resolve_adb("adb")
+            serial = getattr(self.scrcpy, "serial", None)
             if adb_bin:
-                subprocess.run(
-                    [adb_bin, "kill-server"],
-                    capture_output=True,
-                    creationflags=CREATE_NO_WINDOW,
-                    timeout=5,
-                )
-        except Exception:
-            pass
+                if serial and getattr(self.scrcpy, "is_wireless", False):
+                    subprocess.run([adb_bin, "disconnect", serial], capture_output=True,
+                                   creationflags=CREATE_NO_WINDOW, timeout=5)
+                subprocess.run([adb_bin, "kill-server"], capture_output=True,
+                               creationflags=CREATE_NO_WINDOW, timeout=5)
+                logger.info("adb disconnected and server stopped")
+        except Exception as e:
+            logger.warning(f"adb shutdown failed: {e}")
+        # Anything still running in our job (scrcpy, adb) is killed by
+        # Windows when this process exits (see process_guard)
 
         # Stop the CTK main loop
         try:
