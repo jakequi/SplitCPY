@@ -46,6 +46,7 @@ from src.win32_dock import (
 from src.viewport import ViewportManager, FULL_CROP
 from src.scrcpy_manager import valid_crop, ASPECT_PRESETS, ASPECT_ALIASES, FULL_SCREEN_LABEL
 from src import app_volume
+from src.controller_overlay import InputListener, StripRenderer
 from src import process_guard
 from src.device_detection import (
     detect_device, resolve_adb, get_device_info, get_display_list, auto_connect_wireless,
@@ -111,6 +112,10 @@ HOTKEYS = {
     7: (ord("O"), "screens"),
 }
 WS_POPUP = 0x80000000
+# Controller overlay: width of each side strip relative to the bottom screen's height
+OVERLAY_STRIP = 0.42
+WM_PAINT = 0x000F
+WM_APP_TOGGLE_FULLSCREEN = 0x8000 + 1   # WM_APP + 1, posted by the F11 hook
 WS_MAXIMIZEBOX = 0x00010000
 WS_CAPTION = 0x00C00000
 WS_THICKFRAME = 0x00040000
@@ -172,6 +177,17 @@ class Launcher:
         self.audio_latency = self.config.get("audio_latency", "low")
         self.quality = self.config.get("quality", "high")
         self.thor_screens_off = bool(self.config.get("thor_screens_off", False))
+        self.render_driver = self.config.get("render_driver", "direct3d")
+        # Live controller overlay beside the bottom screen (experimental)
+        self.controller_overlay = bool(self.config.get("controller_overlay", False))
+        self.overlay_strips = None          # {"left": (x,y,w,h), "right": ...} client coords
+        self._overlay_listener = None
+        self._overlay_renderer = StripRenderer()
+        self._overlay_bitmaps = {}          # side -> (x, y, w, h, BGRX bytes)
+        self._overlay_lock = threading.Lock()
+        self._overlay_dirty = threading.Event()
+        self._overlay_thread = None
+        self.bottom_fps = int(self.config.get("bottom_fps", 0) or 0)
         # Visible region of each screen (PC-side crop, no restart needed)
         self.top_aspect = self._normalise_aspect(self.config.get("top_aspect", FULL_SCREEN_LABEL))
         self.bottom_aspect = self._normalise_aspect(self.config.get("bottom_aspect", FULL_SCREEN_LABEL))
@@ -323,6 +339,8 @@ class Launcher:
             audio_latency=self.audio_latency,
             crops=self.crops,
             quality=self.quality,
+            render_driver=self.render_driver,
+            bottom_fps=self.bottom_fps,
         )
 
     def _apply_default_layout(self):
@@ -448,6 +466,14 @@ class Launcher:
 
                 elif msg == WM_ACTIVATE and self.fullscreen:
                     self._place_backdrop()
+
+                elif msg == WM_APP_TOGGLE_FULLSCREEN:
+                    self.toggle_fullscreen()
+                    return 0
+
+                elif msg == WM_PAINT and self.overlay_strips:
+                    self._paint_overlay(hwnd)
+                    return 0
 
                 elif msg == WM_HOTKEY:
                     self._on_hotkey(int(wp))
@@ -713,6 +739,12 @@ class Launcher:
                 except Exception as e:
                     logger.error(f"Failed to create fullscreen backdrop: {e}", exc_info=True)
 
+                # F11 = fullscreen while a DualCPY window is in front
+                try:
+                    self._install_f11_hook()
+                except Exception as e:
+                    logger.warning(f"F11 hook unavailable: {e}")
+
                 # Global hotkeys must be registered on the thread that owns hwnd
                 for hk_id, (vk, action) in HOTKEYS.items():
                     if not self.user32.RegisterHotKey(hwnd, hk_id, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, vk):
@@ -761,7 +793,9 @@ class Launcher:
                     self._apply_volume()
             except Exception as e:
                 logger.error(f"Docking monitor error: {e}", exc_info=True)
-            time.sleep(DOCKING_MONITOR_TIME_DELAY)
+            # Poll quickly while a stream window is still to be adopted
+            waiting = not (self.viewports.views["top"].child and self.viewports.views["bottom"].child)
+            time.sleep(0.1 if waiting else DOCKING_MONITOR_TIME_DELAY)
 
     # ------------------------------------------------------------------
     # Viewport layout
@@ -791,15 +825,17 @@ class Launcher:
         rects = {"top": None, "bottom": None}
         if cw <= 0 or ch <= 0:
             return rects
+        strips = 2 * OVERLAY_STRIP * h2 if self._overlay_active() else 0
         if self.view_mode == "both":
-            k = max(0.01, min(cw / max(w1, w2), (ch - g) / (h1 + h2)))
+            k = max(0.01, min(cw / max(w1, w2 + strips), (ch - g) / (h1 + h2)))
             tw, th, bw, bh = w1 * k, h1 * k, w2 * k, h2 * k
             y0 = (ch - (th + bh + g)) / 2
             rects["top"] = ((cw - tw) / 2, y0, tw, th)
             rects["bottom"] = ((cw - bw) / 2, y0 + th + g, bw, bh)
         else:
             w, h = (w1, h1) if self.view_mode == "top" else (w2, h2)
-            k = min(cw / w, ch / h)
+            uw = w + (strips if self.view_mode == "bottom" else 0)
+            k = min(cw / uw, ch / h)
             rects[self.view_mode] = ((cw - w * k) / 2, (ch - h * k) / 2, w * k, h * k)
         out = {key: (list(int(round(v)) for v in r) if r else None) for key, r in rects.items()}
         if self.view_mode == "both":
@@ -834,6 +870,7 @@ class Launcher:
             else:
                 self.viewports.set_visible(key, False)
         self.view_rects = visible
+        self._update_overlay_strips()
 
     def set_view_mode(self, mode):
         """Show both screens stacked, or just the top / bottom (filling the window)"""
@@ -885,11 +922,12 @@ class Launcher:
     def _stage_units(self):
         """Unscaled sizes for the current view: (w, h, gap) with h excluding gap"""
         w1, h1, w2, h2 = self.scrcpy.content_sizes(1.0)
+        strips = 2 * OVERLAY_STRIP * h2 if self._overlay_active() else 0
         if self.view_mode == "both":
-            return max(w1, w2), h1 + h2, self.screen_gap
+            return max(w1, w2 + strips), h1 + h2, self.screen_gap
         if self.view_mode == "top":
             return w1, h1, 0
-        return w2, h2, 0
+        return w2 + strips, h2, 0
 
     def _content_size_for_height(self, height):
         w, h, g = self._stage_units()
@@ -1084,6 +1122,59 @@ class Launcher:
                 apply_docked_style(child)
                 self.viewports.layout_inner(key, force=True)
 
+    def _dualcpy_in_front(self):
+        """Is the foreground window one of ours (stage, split window, panel, backdrop)?"""
+        fg = self.user32.GetForegroundWindow()
+        if not fg:
+            return False
+        self.user32.GetAncestor.restype = wintypes.HWND
+        root = self.user32.GetAncestor(fg, 2) or fg  # GA_ROOT
+        ours = {self.hwnd_container, self.hwnd_backdrop}
+        ours.update(v.hwnd for v in self.viewports.views.values())
+        ui = getattr(self, "ui", None)
+        if ui:
+            try:
+                ours.add(self.user32.GetParent(ui.window.winfo_id()) or ui.window.winfo_id())
+            except Exception:
+                pass
+        return root in {h for h in ours if h}
+
+    def _install_f11_hook(self):
+        """
+        Low-level keyboard hook for F11. Unlike a global hotkey it only acts
+        (and swallows the key) while DualCPY is in front, so F11 keeps working
+        normally in browsers and everything else.
+        """
+        WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN, VK_F11 = 13, 0x0100, 0x0104, 0x7A
+
+        class KBDLLHOOKSTRUCT(ctypes.Structure):
+            _fields_ = [("vkCode", wintypes.DWORD), ("scanCode", wintypes.DWORD),
+                        ("flags", wintypes.DWORD), ("time", wintypes.DWORD),
+                        ("dwExtraInfo", ctypes.c_size_t)]
+
+        HOOKPROC = ctypes.WINFUNCTYPE(self.LRESULT, ctypes.c_int, self.WPARAM, self.LPARAM)
+        self.user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, self.WPARAM, self.LPARAM]
+        self.user32.CallNextHookEx.restype = self.LRESULT
+
+        def proc(n_code, w_param, l_param):
+            try:
+                if n_code == 0 and w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                    kb = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                    if kb.vkCode == VK_F11 and self._dualcpy_in_front():
+                        self.user32.PostMessageW(self.hwnd_container, WM_APP_TOGGLE_FULLSCREEN, 0, 0)
+                        return 1  # swallow: don't also send F11 to the game
+            except Exception:
+                pass
+            return self.user32.CallNextHookEx(None, n_code, w_param, l_param)
+
+        self._f11_proc = HOOKPROC(proc)  # keep a reference
+        self.user32.SetWindowsHookExW.argtypes = [ctypes.c_int, HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD]
+        self.user32.SetWindowsHookExW.restype = wintypes.HHOOK
+        self.kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+        self._f11_hook = self.user32.SetWindowsHookExW(
+            WH_KEYBOARD_LL, self._f11_proc, self.kernel32.GetModuleHandleW(None), 0)
+        logger.info(f"F11 fullscreen hook installed: {bool(self._f11_hook)}")
+
     def _container_placement(self):
         """((x, y), (client_w, client_h)) of the normal (non-fullscreen) container"""
         if not self.hwnd_container or not self.user32.IsWindow(self.hwnd_container):
@@ -1133,6 +1224,8 @@ class Launcher:
             "audio_latency": self.audio_latency,
             "quality": self.quality,
             "thor_screens_off": self.thor_screens_off,
+            "bottom_fps": self.bottom_fps,
+            "controller_overlay": self.controller_overlay,
             "max_fps": self.max_fps,
             "stage_height": self.stage_height,
             "split": not self.docked,
@@ -1143,9 +1236,11 @@ class Launcher:
         if not data or not self.scrcpy:
             return
         restart = False
+        if "controller_overlay" in data and bool(data["controller_overlay"]) != self.controller_overlay:
+            self.set_controller_overlay(bool(data["controller_overlay"]))
         if "thor_screens_off" in data and bool(data["thor_screens_off"]) != self.thor_screens_off:
             self.set_thor_screens_off(bool(data["thor_screens_off"]))
-        for key in ("audio_mode", "audio_latency", "quality"):
+        for key in ("audio_mode", "audio_latency", "quality", "bottom_fps"):
             if key in data and data[key] != getattr(self, key):
                 setattr(self, key, data[key])
                 self.config.set(key, data[key])
@@ -1225,6 +1320,114 @@ class Launcher:
     def set_device_profiles_enabled(self, enabled):
         self.device_profiles_enabled = bool(enabled)
         self.config.set("device_profiles_enabled", self.device_profiles_enabled)
+
+    # ------------------------------------------------------------------
+    # Controller overlay (experimental)
+    # ------------------------------------------------------------------
+    def _overlay_active(self):
+        return self.controller_overlay and self.docked and self.view_mode in ("both", "bottom")
+
+    def set_controller_overlay(self, on):
+        self.controller_overlay = bool(on)
+        try:
+            self.config.set("controller_overlay", self.controller_overlay)
+        except Exception:
+            pass
+        if self.controller_overlay:
+            self._start_overlay_listener()
+        elif self._overlay_listener:
+            self._overlay_listener.stop()
+            self._overlay_listener = None
+        self.fit_container_to_content()
+
+    def _start_overlay_listener(self):
+        if self._overlay_listener:
+            self._overlay_listener.stop()
+        adb_bin = getattr(self.scrcpy, "adb_bin", None)
+        serial = getattr(self.scrcpy, "serial", None)
+        self._overlay_listener = InputListener(adb_bin, serial, on_change=self._overlay_dirty.set)
+        self._overlay_listener.start()
+        if not self._overlay_thread:
+            self._overlay_thread = threading.Thread(target=self._overlay_loop, daemon=True,
+                                                    name="ControllerOverlay")
+            self._overlay_thread.start()
+        self._overlay_dirty.set()
+
+    def _update_overlay_strips(self):
+        """Side strips flank the bottom screen (only in Both / Bottom, combined)"""
+        strips = None
+        bottom = self.view_rects.get("bottom")
+        if self._overlay_active() and bottom:
+            bx, by, bw, bh = bottom
+            sw = int(round(OVERLAY_STRIP * bh))
+            strips = {"left": (bx - sw, by, sw, bh), "right": (bx + bw, by, sw, bh)}
+        if strips != self.overlay_strips:
+            self.overlay_strips = strips
+            with self._overlay_lock:
+                self._overlay_bitmaps = {}
+            self._overlay_dirty.set()
+
+    def _overlay_loop(self):
+        """Re-render the strips when input or size changes (max ~30 fps)"""
+        last = None
+        while self.running:
+            self._overlay_dirty.wait(0.5)
+            self._overlay_dirty.clear()
+            strips = self.overlay_strips
+            if not strips or not self.hwnd_container:
+                continue
+            state = self._overlay_listener.snapshot() if self._overlay_listener else {}
+            key = (tuple(sorted(strips.items())), tuple(sorted(state.items())))
+            if key == last:
+                continue
+            last = key
+            try:
+                bitmaps = {}
+                for side, (x, y, w, h) in strips.items():
+                    img = self._overlay_renderer.render(side, w, h, state)
+                    bitmaps[side] = (x, y, w, h, img.tobytes("raw", "BGRX"))
+                with self._overlay_lock:
+                    self._overlay_bitmaps = bitmaps
+                for side, (x, y, w, h) in strips.items():
+                    rc = wintypes.RECT(x, y, x + w, y + h)
+                    self.user32.InvalidateRect(self.hwnd_container, ctypes.byref(rc), False)
+            except Exception as e:
+                logger.error(f"Overlay render failed: {e}", exc_info=True)
+            time.sleep(1 / 30)
+
+    def _paint_overlay(self, hwnd):
+        class PAINTSTRUCT(ctypes.Structure):
+            _fields_ = [("hdc", wintypes.HDC), ("fErase", wintypes.BOOL), ("rcPaint", wintypes.RECT),
+                        ("fRestore", wintypes.BOOL), ("fIncUpdate", wintypes.BOOL),
+                        ("rgbReserved", ctypes.c_byte * 32)]
+
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG), ("biHeight", wintypes.LONG),
+                        ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD),
+                        ("biCompression", wintypes.DWORD), ("biSizeImage", wintypes.DWORD),
+                        ("biXPelsPerMeter", wintypes.LONG), ("biYPelsPerMeter", wintypes.LONG),
+                        ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
+
+        ps = PAINTSTRUCT()
+        self.user32.BeginPaint.restype = wintypes.HDC
+        hdc = self.user32.BeginPaint(hwnd, ctypes.byref(ps))
+        try:
+            with self._overlay_lock:
+                bitmaps = dict(self._overlay_bitmaps)
+            gdi32 = ctypes.windll.gdi32
+            gdi32.StretchDIBits.argtypes = [
+                wintypes.HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                ctypes.c_void_p, ctypes.c_void_p, wintypes.UINT, wintypes.DWORD]
+            for x, y, w, h, data in bitmaps.values():
+                bmi = BITMAPINFOHEADER()
+                bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+                bmi.biWidth, bmi.biHeight = w, -h  # top-down
+                bmi.biPlanes, bmi.biBitCount = 1, 32
+                buf = ctypes.create_string_buffer(data, len(data))
+                gdi32.StretchDIBits(hdc, x, y, w, h, 0, 0, w, h, buf, ctypes.byref(bmi), 0, 0x00CC0020)
+        finally:
+            self.user32.EndPaint(hwnd, ctypes.byref(ps))
 
     # ------------------------------------------------------------------
     # Volume
@@ -1411,6 +1614,8 @@ class Launcher:
 
                 new.start_scrcpy(serial=serial)
                 self._volume_applied_pid = None
+                if self.controller_overlay:
+                    self._start_overlay_listener()
                 self._notify("Streams restarted", "success")
             except Exception as e:
                 logger.error(f"Stream restart failed: {e}", exc_info=True)
@@ -1887,6 +2092,8 @@ class Launcher:
             return
 
         self._apply_thor_screens_on_connect()
+        if self.controller_overlay:
+            self._start_overlay_listener()
 
         # Start background threads
         self._create_container_window()
@@ -1905,8 +2112,11 @@ class Launcher:
         self.ui = CTkUI(self)
         self._tk_root = self.ui.window
 
-        # Apply the default profile once the stage window exists
+        # Apply the default profile once the stage window exists, and put the
+        # panel beside the stage rather than on top of it
         self.ui.window.after(1200, self.ui.load_default_profile)
+        self.ui.window.after(400, self.ui.place_beside_stage)
+        self.ui.window.after(1600, self.ui.place_beside_stage)
 
         self.ui.run()
 
@@ -2036,6 +2246,9 @@ class Launcher:
                 )
             except Exception:
                 pass
+
+        if self._overlay_listener:
+            self._overlay_listener.stop()
 
         # Give the Thor its screens back before disconnecting
         try:

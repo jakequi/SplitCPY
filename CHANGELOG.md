@@ -19,10 +19,14 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 - **Easier pairing**: open "Pair device with pairing code" on the Thor and DualCPY fills in the address - just type the 6-digit code
 - **Thor screens off while streaming** (switch or Ctrl+Alt+O): the top panel is switched off with scrcpy's Alt+O (mirroring keeps running) and the bottom panel goes to minimum brightness via Android's per-display brightness (the same call AYN's own slider makes; scrcpy can't power the bottom panel off on Android 13). Instant, no restart; everything comes back on when switched off, on exit, or - via scrcpy's on-device cleanup - if the stream ends unexpectedly
 - **(i) buttons**: explanations in the control panel are hidden by default and shown per section
+- **Controller overlay (experimental)**: the Thor's controls drawn beside the bottom screen, lighting up live as you press them (read from the device over adb - nothing to install). Part of the stage window, so OBS captures it; the window widens just enough to fit. Idea, input handling and layout from [scrcpy-thor-ui](https://github.com/tommywaaf/scrcpy-thor-ui) by tommywaaf, rendering rewritten for DualCPY Split
+- **Renderer** setting: Direct3D 9 (default) or Direct3D 11 (can be smoother on Windows 11)
+- **Bottom FPS** setting: same as top, or 30 to free the Thor's GPU for the top screen
+- **F11** toggles fullscreen while DualCPY is in front (doesn't affect other apps)
 - **Instant wireless connect**: on start-up a paired handheld is reconnected automatically (finds its current wireless-debugging port on the network, or uses the last address) - no dialog. Quick Connect and Pair now go straight into the streams instead of waiting for you to close the window; if the port changed, the new one is found automatically
 - **Volume slider** (sets the stream's volume in the Windows mixer)
 - **Audio output** setting: PC, Device (keep sound on the handheld) or Both (Android 13+)
-- **Latency** setting: Low (default; 30 ms audio buffer on USB, 80 ms on Wi-Fi), Balanced, Stable
+- **Latency** setting: Low (default; 60 ms audio buffer on USB, 80 ms on Wi-Fi), Balanced, Stable
 - **Quality** setting (Standard / High / Very High / Max) - video bitrate; the connection test picks the highest your link carries
 - **Split Windows**: two independent windows you can move, resize (aspect-locked) and capture separately; closing one recombines them
 - **Fit to Monitor**: maximise the window, or stack split windows as large as possible
@@ -39,6 +43,10 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 - scrcpy and adb are tied to DualCPY with a Windows job object, so they always close with it - even after a crash
 
 ### Bugfixes
+- Start-up: scrcpy windows open off-screen and are adopted within ~0.1 s (no flashing/jumping), and the control panel opens beside the stage instead of on top of it
+- Ctrl+Alt+M could hide the panel instead of showing it while fullscreen
+- Fullscreen / Split Windows buttons are highlighted only while active
+- USB audio buffer raised to 60 ms + 15 ms output (30 ms clicked on dense music - measured by scrcpy-thor-ui)
 - Screenshot button could crash the app (replaced dxcam with Windows screen capture; works on any monitor)
 - Overlapping stream restarts could orphan scrcpy processes that kept playing audio in the background
 - UI updates from background threads could crash Tk (now queued to the UI thread)

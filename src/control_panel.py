@@ -386,12 +386,14 @@ class CTkUI:
         row.pack(fill="x", padx=16, pady=(0, 4))
         row.columnconfigure(0, weight=1)
         row.columnconfigure(1, weight=1)
-        self._fullscreen_btn_text = tk.StringVar(value="Fullscreen")
-        ctk.CTkButton(
+        self._fullscreen_btn_text = tk.StringVar(value="Fullscreen (F11)")
+        self._fullscreen_btn = ctk.CTkButton(
             row, textvariable=self._fullscreen_btn_text, command=self._on_fullscreen,
-            fg_color=ACCENT_COLOUR, hover_color=ACCENT2_COLOUR,
-            text_color="#ffffff", font=make_font(13, "bold"),
-        ).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+            fg_color=PANEL_COLOUR, hover_color=BORDER_COLOUR,
+            border_color=BORDER_COLOUR, border_width=1,
+            text_color=TEXT_COLOUR, font=make_font(13),
+        )
+        self._fullscreen_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
         self._dock_btn_text = tk.StringVar(value=self._dock_label())
         self._dock_btn = ctk.CTkButton(
             row, textvariable=self._dock_btn_text, command=self._on_dock_toggle,
@@ -409,6 +411,13 @@ class CTkUI:
             command=lambda: self.l.set_thor_screens_off(bool(self._screens_off_var.get())),
             progress_color=ACCENT_COLOUR, text_color=TEXT_COLOUR, font=make_font(13),
         ).pack(anchor="w", padx=16, pady=(6, 2))
+        self._overlay_var = tk.BooleanVar(value=self.l.controller_overlay)
+        ctk.CTkSwitch(
+            self._scroll, text="Controller overlay beside bottom screen (experimental)",
+            variable=self._overlay_var,
+            command=lambda: self.l.set_controller_overlay(bool(self._overlay_var.get())),
+            progress_color=ACCENT_COLOUR, text_color=TEXT_COLOUR, font=make_font(13),
+        ).pack(anchor="w", padx=16, pady=(2, 2))
 
         self._build_slider("screen_gap", "Gap", self.l.screen_gap, 0, 200,
                            color=ACCENT_COLOUR, is_float=False,
@@ -418,7 +427,7 @@ class CTkUI:
                    "the screens, Top / Bottom show one screen. Fullscreen centres it on a black "
                    "background that OBS doesn't capture.\n"
                    "Hotkeys (work in-game): Ctrl+Alt+1 Both, Ctrl+Alt+2 Top, Ctrl+Alt+3 Bottom, "
-                   "Ctrl+Alt+S cycle, Ctrl+Alt+F fullscreen, Ctrl+Alt+M show/hide this menu, Ctrl+Alt+O Thor screens off/on.\n"
+                   "Ctrl+Alt+S cycle, Ctrl+Alt+F (or F11 when DualCPY is in front) fullscreen, Ctrl+Alt+M show/hide this menu, Ctrl+Alt+O Thor screens off/on.\n"
                    "OBS: Window Capture the \"DualCPY | ...\" window, then right-click it > Transform > "
                    "Edit Transform > Bounding Box Type: \"Scale to inner bounds\", Alignment: Center. "
                    "Switching views is then seamless.")
@@ -464,6 +473,16 @@ class CTkUI:
         self._fps_var = self._dropdown(
             self._scroll, "Frame rate", [fps_label(v) for v in ALLOWED_FPS_VALUES],
             fps_label(self.l.max_fps), self._on_fps_change)
+        self._bottom_fps_var = self._dropdown(
+            self._scroll, "Bottom FPS", ["Same as top", "30 FPS"],
+            "30 FPS" if self.l.bottom_fps == 30 else "Same as top",
+            lambda v: self._on_stream_option("bottom_fps", 30 if v.startswith("30") else 0))
+        from src.scrcpy_manager import RENDER_DRIVERS, RENDER_DRIVER_LABELS
+        self._renderer_label_to_key = {RENDER_DRIVER_LABELS[k]: k for k in RENDER_DRIVERS}
+        self._renderer_var = self._dropdown(
+            self._scroll, "Renderer", [RENDER_DRIVER_LABELS[k] for k in RENDER_DRIVERS],
+            RENDER_DRIVER_LABELS.get(self.l.render_driver, "Direct3D 9"),
+            lambda v: self._on_stream_option("render_driver", self._renderer_label_to_key[v]))
         self._hint("Audio output - PC, Device (sound stays on the handheld) or Both (Android 13+).\n"
                    "Latency - Low: smallest delay, full quality (USB / strong Wi-Fi). If sound warps "
                    "or crackles, try Balanced, then Stable.\n"
@@ -471,6 +490,10 @@ class CTkUI:
                    "motion and dark scenes, but needs more bandwidth. Max suits USB / fast Wi-Fi.\n"
                    "Frame rate - 120 FPS (experimental) needs a 120 Hz+ monitor and a game running at "
                    "120; it uses ~1.5x the bandwidth. OBS still records at its own rate (usually 60).\n"
+                   "Bottom FPS - 30 frees the Thor's GPU for the top screen when the bottom is "
+                   "mostly menus (3DS, many Android games); keep 'Same' for DS games.\n"
+                   "Renderer - Direct3D 11 can be smoother on Windows 11; switch back if you see "
+                   "black or flickering screens.\n"
                    "Changing these restarts the streams (a second or two).")
         test_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
         test_row.pack(fill="x", padx=16, pady=(4, 0))
@@ -562,8 +585,13 @@ class CTkUI:
             label = {v: k for k, v in self._view_label_to_key.items()}[self.l.view_mode]
             self._view_seg.set(label)
             self._view_seg.configure(state="normal" if self.l.docked else "disabled")
-            self._fullscreen_btn_text.set("Exit Fullscreen" if self.l.fullscreen else "Fullscreen")
+            self._fullscreen_btn_text.set("Exit Fullscreen (F11)" if self.l.fullscreen else "Fullscreen (F11)")
             self._dock_btn_text.set(self._dock_label())
+            # Highlight only while the mode is actually on
+            for btn, on in ((self._fullscreen_btn, self.l.fullscreen), (self._dock_btn, not self.l.docked)):
+                btn.configure(fg_color=ACCENT_COLOUR if on else PANEL_COLOUR,
+                              hover_color=ACCENT2_COLOUR if on else BORDER_COLOUR,
+                              text_color="#ffffff" if on else TEXT_COLOUR)
         except Exception as e:
             logger.debug(f"View button refresh failed: {e}")
 
@@ -855,15 +883,52 @@ class CTkUI:
         self._device_profiles_btn.configure(
             state="normal" if self.l.device_profiles_enabled else "disabled")
 
+    def place_beside_stage(self):
+        """Move the panel next to the DualCPY window (right, else left) so it doesn't cover it"""
+        try:
+            hwnd = self.l.hwnd_container
+            if not hwnd or self.l.fullscreen or not self.l.docked:
+                return
+            from src.win32_dock import monitor_work_area
+            stage = wintypes.RECT()
+            windll.user32.GetWindowRect(hwnd, ctypes.byref(stage))
+            work = monitor_work_area(hwnd)
+            if not work:
+                return
+            self.window.update_idletasks()
+            me = windll.user32.GetParent(self.window.winfo_id()) or self.window.winfo_id()
+            mine = wintypes.RECT()
+            windll.user32.GetWindowRect(me, ctypes.byref(mine))
+            pw, ph = mine.right - mine.left, mine.bottom - mine.top
+            # already clear of the stage? leave it where the user put it
+            if mine.right <= stage.left or mine.left >= stage.right or \
+                    mine.bottom <= stage.top or mine.top >= stage.bottom:
+                return
+            gap = 12
+            if stage.right + gap + pw <= work[2]:
+                x = stage.right + gap
+            elif stage.left - gap - pw >= work[0]:
+                x = stage.left - gap - pw
+            else:
+                return
+            y = max(work[1], min(stage.top, work[3] - ph))
+            windll.user32.SetWindowPos(me, 0, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010)
+        except Exception as e:
+            logger.debug(f"Panel placement failed: {e}")
+
     def toggle_panel(self):
         """Ctrl+Alt+M: bring the menu up over the stream (even fullscreen), or hide it"""
         w = self.window
         try:
             visible = w.state() == "normal"
-            focused = w.focus_displayof() is not None
+            # Ask Windows what's really in front: Tk's own focus state stays set
+            # while the panel sits hidden behind the fullscreen stage, which
+            # made the hotkey hide it instead of showing it
+            hwnd = windll.user32.GetParent(w.winfo_id()) or w.winfo_id()
+            in_front = windll.user32.GetForegroundWindow() == hwnd
         except Exception:
-            visible, focused = False, False
-        if visible and focused:
+            visible, in_front = False, False
+        if visible and in_front:
             w.iconify()
             return
         w.deiconify()
@@ -1182,6 +1247,7 @@ class CTkUI:
             from src.scrcpy_manager import QUALITY_LABELS
             self._quality_var.set(QUALITY_LABELS.get(self.l.quality, "High"))
             self._screens_off_var.set(self.l.thor_screens_off)
+            self._overlay_var.set(self.l.controller_overlay)
             self._fps_var.set(fps_label(self.l.max_fps))
             self._audio_var.set(AUDIO_MODE_LABELS.get(self.l.audio_mode, "PC"))
             self._latency_var.set(AUDIO_LATENCY_LABELS.get(self.l.audio_latency, "Low"))

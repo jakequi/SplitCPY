@@ -90,11 +90,24 @@ AUDIO_BUFFER_MS = {
     # (usb, wireless)
     # Wi-Fi delivers data in bursts; below ~80 ms scrcpy keeps resampling
     # to stay in sync, which is heard as warping / speeding up / slowing down
-    "low": (30, 80),
-    "auto": (60, 120),
+    # USB floor of 60 ms: scrcpy's Opus encoder emits bursts on dense music
+    # and 30 ms underran (click + one-frame stall) - measured by
+    # scrcpy-thor-ui (tommywaaf)
+    "low": (60, 80),
+    "auto": (80, 120),
     "stable": (120, 250),
 }
-AUDIO_OUTPUT_BUFFER_MS = {"low": 10, "auto": 10, "stable": 15}
+AUDIO_OUTPUT_BUFFER_MS = {"low": 15, "auto": 15, "stable": 20}
+
+# 2) Renderer used by scrcpy's window (SDL3). Upstream forced "direct3d"
+#    (Direct3D 9); Direct3D 11 avoids Windows 11's throttling of D3D9
+#    child-window presentation (scrcpy-thor-ui).
+RENDER_DRIVERS = ("direct3d", "direct3d11")
+RENDER_DRIVER_LABELS = {"direct3d": "Direct3D 9", "direct3d11": "Direct3D 11"}
+
+# 3) Optional bottom-screen frame-rate cap: frees the device GPU/encoder for
+#    the top screen when the bottom is mostly menus/controls
+BOTTOM_FPS_OPTIONS = (0, 30)   # 0 = same as top
 # Wi-Fi stream caps per latency profile: (top max size, bottom max size, Mbps per megapixel)
 # None = native resolution
 WIRELESS_PROFILE = {
@@ -243,7 +256,8 @@ class ScrcpyManager:
     def __init__(self, profile, scale=None, scrcpy_bin=None,
                  adb_bin=None, enable_audio_top=True, max_fps=int(DEFAULT_MAX_FPS),
                  audio_mode="pc", audio_latency="low",
-                 crops=None, quality="high", screens_off=False):
+                 crops=None, quality="high", screens_off=False,
+                 render_driver="direct3d", bottom_fps=0):
         """
         Initialize the scrcpy manager.
         """
@@ -261,6 +275,8 @@ class ScrcpyManager:
         self.audio_latency = audio_latency if audio_latency in AUDIO_LATENCY_MODES else "low"
         self.quality = quality if quality in QUALITY_MODES else "high"
         self.screens_off = bool(screens_off)  # unused: screens are dimmed via settings
+        self.render_driver = render_driver if render_driver in RENDER_DRIVERS else "direct3d"
+        self.bottom_fps = int(bottom_fps) if bottom_fps in BOTTOM_FPS_OPTIONS else 0
         # Visible region of each screen as (left, top, right, bottom) fractions
         # of the full frame. Applied on the PC side (viewport), so changing it
         # never restarts the stream.
@@ -639,7 +655,7 @@ class ScrcpyManager:
 
         args = [
             f"--video-bit-rate={bitrate_mbps}M",
-            f"--render-driver={DEFAULT_RENDER_DRIVER}",
+            f"--render-driver={DEFAULT_RENDER_DRIVER}",  # replaced per instance at launch
             f"--video-codec={DEFAULT_VIDEO_CODEC}",
             f"--video-codec-options={codec_options}",
             "--no-mipmaps",
@@ -680,6 +696,14 @@ class ScrcpyManager:
                                      BITRATE_MBPS_PER_MP_USB * fps_factor, enable_audio=False)
 
         return max_size, list(args)
+
+    def _with_renderer(self, args):
+        """Use the chosen SDL render driver (custom profile args may set their own)"""
+        if any(a.startswith("--render-driver") for a in args) and not any(
+                a == f"--render-driver={DEFAULT_RENDER_DRIVER}" for a in args):
+            return list(args)
+        return [a for a in args if not a.startswith("--render-driver")] + \
+            [f"--render-driver={self.render_driver}"]
 
     @staticmethod
     def _is_audio_arg(arg):
@@ -763,7 +787,7 @@ class ScrcpyManager:
             profile.top_display_id,
             top_title,
             top_size,
-            extra_args=top_args,
+            extra_args=self._with_renderer(top_args),
             max_fps_override=self.max_fps,
         )
 
@@ -790,12 +814,14 @@ class ScrcpyManager:
             WIRELESS_MAX_SIZE_BOTTOM, profile.extra_scrcpy_args_bottom,
         )
         bottom_args = bottom_args + ["--no-audio", "--gamepad=disabled"]
+        bottom_fps = min(self.bottom_fps, self.max_fps) if self.bottom_fps else None
         self._start_window(
             use_serial,
             profile.bottom_display_id,
             bottom_title,
             bottom_size,
-            extra_args=bottom_args,
+            extra_args=self._with_renderer(bottom_args),
+            max_fps_override=bottom_fps,
         )
 
         logger.info("All scrcpy windows started successfully")
@@ -826,6 +852,9 @@ class ScrcpyManager:
             "--window-title", window_title,
             "--max-size",     f"{int(max_size)}",
             "--max-fps",      str(max_fps_override if max_fps_override is not None else self.max_fps),
+            # Open off-screen and frameless: DualCPY pulls the window into its
+            # own a moment later, so nothing flashes or jumps around on screen
+            "--window-x=-30000", "--window-y=-30000", "--window-borderless",
             *(extra_args or []),
         ]
 
