@@ -39,7 +39,6 @@ from src.ui_constants import (
     resource_path, load_calsans, make_font, apply_window_icon,
 )
 from src.device_profile_editor import DeviceProfileEditorDialog
-from src.crop_detect import detect_content, FULL_CROP
 
 logger = logging.getLogger(__name__)
 
@@ -284,6 +283,7 @@ class CTkUI:
             dropdown_fg_color=PANEL_COLOUR, dropdown_hover_color=BORDER_COLOUR,
             dropdown_text_color=TEXT_COLOUR,
             font=make_font(13), dropdown_font=make_font(13),
+            dynamic_resizing=False,
         ).grid(row=0, column=1, sticky="ew", padx=(10, 0))
         return var
 
@@ -303,6 +303,9 @@ class CTkUI:
         )
         self._audio_label_to_key = {AUDIO_MODE_LABELS[k]: k for k in AUDIO_MODES}
         self._latency_label_to_key = {AUDIO_LATENCY_LABELS[k]: k for k in AUDIO_LATENCY_MODES}
+        self._view_label_to_key = {"Both": "both", "Top": "top", "Bottom": "bottom"}
+        self._volume_after = None
+        self._volume_save_after = None
 
         # The scrollable frame fills the entire window and responds to resizing
         self._scroll = ctk.CTkScrollableFrame(
@@ -347,16 +350,30 @@ class CTkUI:
         )
         self._status_label.pack(anchor="w", padx=16, pady=(2, 0))
 
-        # -------------------------------------------------------- Screens
+        # -------------------------------------------------------- View
         self._separator()
-        self._section("Screens")
+        self._section("View")
+
+        self._view_seg = ctk.CTkSegmentedButton(
+            self._scroll, values=list(self._view_label_to_key.keys()),
+            command=lambda label: self.l.set_view_mode(self._view_label_to_key[label]),
+            font=make_font(14, "bold"), height=36,
+            fg_color=PANEL_COLOUR, selected_color=ACCENT_COLOUR,
+            selected_hover_color=ACCENT2_COLOUR, unselected_color=PANEL_COLOUR,
+            unselected_hover_color=BORDER_COLOUR, text_color=TEXT_COLOUR,
+        )
+        self._view_seg.pack(fill="x", padx=16, pady=(4, 6))
 
         row = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        row.pack(fill="x", padx=16, pady=(4, 4))
+        row.pack(fill="x", padx=16, pady=(0, 4))
         row.columnconfigure(0, weight=1)
         row.columnconfigure(1, weight=1)
-        self._button(row, "Fit to Monitor", self._on_fit_to_monitor, accent=True) \
-            .grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self._fullscreen_btn_text = tk.StringVar(value="Fullscreen")
+        ctk.CTkButton(
+            row, textvariable=self._fullscreen_btn_text, command=self._on_fullscreen,
+            fg_color=ACCENT_COLOUR, hover_color=ACCENT2_COLOUR,
+            text_color="#ffffff", font=make_font(13, "bold"),
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 4))
         self._dock_btn_text = tk.StringVar(value=self._dock_label())
         self._dock_btn = ctk.CTkButton(
             row, textvariable=self._dock_btn_text, command=self._on_dock_toggle,
@@ -365,74 +382,53 @@ class CTkUI:
             text_color=TEXT_COLOUR, font=make_font(13),
         )
         self._dock_btn.grid(row=0, column=1, sticky="ew", padx=(4, 0))
-        self._hint("Fit to Monitor: biggest possible, stacked and centred on the current monitor.\n"
-                   "Split Windows: two separate windows you can move, resize and capture individually.")
+        self._button(self._scroll, "Fit to Monitor", self._on_fit_to_monitor) \
+            .pack(fill="x", padx=16, pady=(4, 2))
 
-        safe_scale = self.l.global_scale if self.l.global_scale is not None else 0.6
-        self._build_slider("global_scale", "Size",
-                           safe_scale, GLOBAL_SCALE_MIN, GLOBAL_SCALE_MAX,
-                           color=ACCENT_COLOUR, is_float=True,
-                           on_change=self._on_scale_change)
+        self._build_slider("screen_gap", "Gap", self.l.screen_gap, 0, 200,
+                           color=ACCENT_COLOUR, is_float=False,
+                           on_change=self._on_gap_change)
 
+        self._hint("The DualCPY window always fills itself with the chosen view: Both stacks the "
+                   "screens, Top / Bottom show one screen as big as fits (side bars stay).\n"
+                   "Hotkeys (work in-game): Ctrl+Alt+1 Both, Ctrl+Alt+2 Top, Ctrl+Alt+3 Bottom, "
+                   "Ctrl+Alt+S cycle, Ctrl+Alt+F fullscreen.\n"
+                   "OBS: add a Window Capture of the \"DualCPY | ...\" window.")
+
+        # -------------------------------------------------------- Aspect
+        self._separator()
+        self._section("Aspect (crop black bars)")
         aspects = list(ASPECT_PRESETS.keys())
         self._top_aspect_var = self._dropdown(
-            self._scroll, "Top aspect", aspects, self.l.top_aspect,
+            self._scroll, "Top", aspects, self.l.top_aspect,
             lambda v: self._on_aspect("top", v))
         self._bottom_aspect_var = self._dropdown(
-            self._scroll, "Bottom aspect", aspects, self.l.bottom_aspect,
+            self._scroll, "Bottom", aspects, self.l.bottom_aspect,
             lambda v: self._on_aspect("bottom", v))
+        self._hint("Pick the system you're playing to cut the black bars - the screen then takes the "
+                   "game's shape. Instant, never restarts the stream.")
 
-        det = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        det.pack(fill="x", padx=16, pady=(4, 2))
-        det.columnconfigure(0, weight=1)
-        det.columnconfigure(1, weight=1)
-        self._button(det, "Detect Game Area", self._on_detect_both, accent=True) \
-            .grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 6))
-        self._button(det, "Detect Top", lambda: self._on_detect(["top"])) \
-            .grid(row=1, column=0, sticky="ew", padx=(0, 4))
-        self._button(det, "Detect Bottom", lambda: self._on_detect(["bottom"])) \
-            .grid(row=1, column=1, sticky="ew", padx=(4, 0))
-        self._hint("Detect Game Area finds the game's picture and crops away the black bars exactly "
-                   "(works for 4:3, integer-scaled, anything). Run it again when you change game. "
-                   "Aspect presets crop a centred area instantly. Neither restarts the stream.")
-
-        # -------------------------------------------------------- Position
+        # -------------------------------------------------------- Audio & Stream
         self._separator()
-        self._section("Position (combined window)")
-        for attr, label, color in [
-            ("tx", "Top X", TOP_COLOUR),
-            ("ty", "Top Y", TOP_COLOUR),
-            ("bx", "Bottom X", BOTTOM_COLOUR),
-            ("by", "Bottom Y", BOTTOM_COLOUR),
-        ]:
-            val = getattr(self.l, attr, 0) or 0
-            self._build_slider(attr, label, val,
-                               SCREEN_MIN_POS, SCREEN_MAX_POS,
-                               color=color, is_float=False,
-                               on_change=self._on_layout_change,
-                               clamp_entry=False)
-        self._split_note = self._hint("")
-        self._button(self._scroll, "Reset Layout", self._on_default_layout) \
-            .pack(fill="x", padx=16, pady=(4, 0))
-
-        # -------------------------------------------------------- Stream
-        self._separator()
-        self._section("Stream")
-        self._fps_var = self._dropdown(
-            self._scroll, "Frame rate", [f"{v} FPS" for v in ALLOWED_FPS_VALUES],
-            f"{self.l.max_fps} FPS", self._on_fps_change)
+        self._section("Audio & Stream")
+        self._build_slider("volume", "Volume", self.l.volume, 0, 100,
+                           color=ACCENT_COLOUR, is_float=False,
+                           on_change=self._on_volume_change)
         self._audio_var = self._dropdown(
             self._scroll, "Audio output", [AUDIO_MODE_LABELS[k] for k in AUDIO_MODES],
             AUDIO_MODE_LABELS.get(self.l.audio_mode, "PC"),
             lambda v: self._on_stream_option("audio_mode", self._audio_label_to_key[v]))
         self._latency_var = self._dropdown(
-            self._scroll, "Audio latency", [AUDIO_LATENCY_LABELS[k] for k in AUDIO_LATENCY_MODES],
-            AUDIO_LATENCY_LABELS.get(self.l.audio_latency, "Auto"),
+            self._scroll, "Latency", [AUDIO_LATENCY_LABELS[k] for k in AUDIO_LATENCY_MODES],
+            AUDIO_LATENCY_LABELS.get(self.l.audio_latency, "Low"),
             lambda v: self._on_stream_option("audio_latency", self._latency_label_to_key[v]))
-        self._hint("Audio output - PC: sound on the PC only. Device: sound stays on the handheld. "
-                   "Both: PC and handheld (Android 13+).\n"
-                   "Audio latency - if sound warps or crackles (common on Wi-Fi), choose Stable.\n"
-                   "Changes here restart the streams automatically.")
+        self._fps_var = self._dropdown(
+            self._scroll, "Frame rate", [f"{v} FPS" for v in ALLOWED_FPS_VALUES],
+            f"{self.l.max_fps} FPS", self._on_fps_change)
+        self._hint("Audio output - PC, Device (sound stays on the handheld) or Both (Android 13+).\n"
+                   "Latency - Low: smallest delay, full quality (USB / strong Wi-Fi). If sound warps "
+                   "or crackles, try Balanced, then Stable.\n"
+                   "Changing these restarts the streams (a second or two).")
         self._button(self._scroll, "Restart Streams", self._on_restart) \
             .pack(fill="x", padx=16, pady=(4, 0))
 
@@ -440,7 +436,7 @@ class CTkUI:
         self._separator()
         self._section("Tools")
         grid = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        grid.pack(fill="x", padx=16, pady=(4, 4))
+        grid.pack(fill="x", padx=16, pady=(4, 20))
         grid.columnconfigure(0, weight=1)
         grid.columnconfigure(1, weight=1)
         self._button(grid, "Screenshot", self.take_screenshot) \
@@ -452,46 +448,7 @@ class CTkUI:
         self._button(grid, "Device Profiles", self._on_edit_profiles) \
             .grid(row=1, column=1, sticky="ew", padx=(4, 0), pady=4)
 
-        # -------------------------------------------------------- Presets
-        self._separator()
-        self._section("Layout Presets")
-
-        save_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        save_row.pack(fill="x", padx=16, pady=4)
-        save_row.columnconfigure(0, weight=1)
-
-        self._preset_name_var = tk.StringVar(value=DEFAULT_PRESET_NAME)
-        ctk.CTkEntry(
-            save_row,
-            textvariable=self._preset_name_var,
-            placeholder_text="Preset name...",
-            fg_color=PANEL_COLOUR,
-            border_color=BORDER_COLOUR,
-            text_color=TEXT_COLOUR,
-            font=make_font(13),
-        ).grid(row=0, column=0, sticky="ew", padx=(0, 8))
-
-        ctk.CTkButton(
-            save_row,
-            text="Save",
-            width=80,
-            command=self._on_save_preset,
-            fg_color=ACCENT_COLOUR,
-            hover_color=ACCENT2_COLOUR,
-            font=make_font(13),
-        ).grid(row=0, column=1)
-
-        self._preset_list_frame = ctk.CTkScrollableFrame(
-            self._scroll,
-            fg_color=PANEL_COLOUR,
-            height=150,
-            scrollbar_button_color=BORDER_COLOUR,
-        )
-        self._preset_list_frame.pack(fill="x", padx=16, pady=(6, 20))
-        self._preset_list_frame.columnconfigure(0, weight=1)
-
-        self.refresh_preset_list()
-        self._refresh_split_state()
+        self._refresh_view_buttons()
 
     def _dock_label(self):
         return "Split Windows" if self.l.docked else "Combine Windows"
@@ -505,14 +462,16 @@ class CTkUI:
         except Exception:
             pass
 
-    def _refresh_split_state(self):
-        """Explain that the position sliders only apply to the combined window"""
-        if self.l.docked:
-            self._split_note.configure(text="")
-        else:
-            self._split_note.configure(
-                text="Split mode: drag the windows wherever you like. "
-                     "These sliders apply when combined.")
+    def _refresh_view_buttons(self):
+        """Reflect view mode / fullscreen / split state in the panel"""
+        try:
+            label = {v: k for k, v in self._view_label_to_key.items()}[self.l.view_mode]
+            self._view_seg.set(label)
+            self._view_seg.configure(state="normal" if self.l.docked else "disabled")
+            self._fullscreen_btn_text.set("Exit Fullscreen" if self.l.fullscreen else "Fullscreen")
+            self._dock_btn_text.set(self._dock_label())
+        except Exception as e:
+            logger.debug(f"View button refresh failed: {e}")
 
     # Layout helpers
     def _separator(self):
@@ -639,95 +598,42 @@ class CTkUI:
         }
 
     # Slider / button callbacks
-    def _on_scale_change(self):
-        ref = self._slider_refs.get("global_scale")
-        if ref is None:
+    def _on_gap_change(self):
+        ref = self._slider_refs.get("screen_gap")
+        if ref:
+            self.l.set_screen_gap(int(ref["real"].get()))
+
+    def _on_volume_change(self):
+        ref = self._slider_refs.get("volume")
+        if not ref:
             return
-        new_scale = round(float(ref["real"].get()), 2)
-        if new_scale <= 0 or abs(new_scale - (self.l.global_scale or 0)) < 0.005:
-            return
-        # Applies instantly - no restart needed any more
-        self.l._fitted = False
-        self.l.set_scale_live(new_scale, keep_positions=True)
-        self._sync_sliders_from_launcher(skip=("global_scale",))
+        vol = int(ref["real"].get())
+        # Debounce: apply ~12x/sec while dragging, save once you let go
+        if self._volume_after:
+            self.window.after_cancel(self._volume_after)
+        self._volume_after = self.window.after(80, lambda: self.l.set_volume(vol))
+        if self._volume_save_after:
+            self.window.after_cancel(self._volume_save_after)
+        self._volume_save_after = self.window.after(600, self.l.save_volume)
 
     def _on_aspect(self, key, name):
         crop = self.l.scrcpy.preset_crop(key, name)
         if self.l.set_crop(key, crop, name):
-            self._sync_sliders_from_launcher()
-            self.show_status(f"{key.title()} screen: {name}", "success")
+            from src.scrcpy_manager import aspect_short
+            self.show_status(f"{key.title()} screen: {aspect_short(name)}", "success")
 
-    def _on_detect_both(self):
-        self._on_detect(["top", "bottom"])
-
-    def _on_detect(self, keys):
-        """Show the full frame briefly, capture it, find the picture, crop to it"""
-        if not (self.l.dock.hwnd_top or self.l.dock.hwnd_bottom):
-            self.show_status("Streams aren't running yet", "error")
-            return
-        self.show_status("Detecting game area...", "info")
-        self.l.bring_to_front(None if self.l.docked else keys[0])
-        for key in keys:
-            if not self.l.docked:
-                self.l.bring_to_front(key)
-            self.l.show_full_frame(key)
-        # Give scrcpy a moment to redraw at the new size
-        self.window.after(450, lambda: self._finish_detect(keys))
-
-    def _finish_detect(self, keys):
-        results = []
-        for key in keys:
-            crop = None
-            try:
-                rect = self.l.capture_rect(key)
-                if rect and rect[2] > rect[0] and rect[3] > rect[1]:
-                    img = ImageGrab.grab(bbox=rect, all_screens=True)
-                    crop = detect_content(img, self.l.scrcpy.full_aspect(key))
-            except Exception as e:
-                logger.error(f"Detection failed for {key}: {e}", exc_info=True)
-            self.l.restore_crop_view(key)
-            if crop is None:
-                results.append(f"{key}: no picture found")
-                continue
-            name = "Full" if crop == FULL_CROP else "Detected"
-            self.l.set_crop(key, crop, name)
-            l, t, r, b = crop
-            w = (r - l) * self.l.scrcpy.full_aspect(key)
-            results.append(f"{key}: {name}" + ("" if name == "Full" else f" ({w / (b - t):.2f}:1)"))
-        self._sync_sliders_from_launcher()
-        ok = all("no picture" not in r for r in results)
-        self.show_status("Detect - " + ", ".join(results), "success" if ok else "warning", duration=5.0)
+    def _on_fullscreen(self):
+        self.l.toggle_fullscreen()
+        self._refresh_view_buttons()
+        if self.l.fullscreen:
+            self.show_status("Fullscreen - Ctrl+Alt+F to exit", "success", duration=4.0)
 
     def _on_fit_to_monitor(self):
-        scale = self.l.fit_to_monitor()
-        if scale is None:
+        if self.l.fit_to_monitor() is None:
             self.show_status("Could not read the monitor size", "error")
             return
-        self._sync_sliders_from_launcher()
-        self.force_window_sync()
+        self._refresh_view_buttons()
         self.show_status("Fitted to monitor", "success")
-
-    def _on_default_layout(self):
-        """Reset tx/ty/bx/by to the profile's centred default and sync everything"""
-        defaults = self.l.get_default_layout()
-        for attr, val in defaults.items():
-            self.l.__dict__[attr] = val
-        self.l._fitted = False
-        self.l.save_layout()
-        self.l._resize_container_window()
-        self._sync_sliders_from_launcher()
-        self.force_window_sync()
-        self.show_status("Layout reset", "success")
-
-    def _on_layout_change(self):
-        for attr in ("tx", "ty", "bx", "by"):
-            ref = self._slider_refs.get(attr)
-            if ref:
-                setattr(self.l, attr, int(ref["real"].get()))
-        self.l._fitted = False
-        self.l.save_layout()
-        self.l._resize_container_window()
-        self.force_window_sync()
 
     def _on_fps_change(self, value):
         try:
@@ -753,8 +659,7 @@ class CTkUI:
     def _on_dock_toggle(self):
         if hasattr(self.l, "toggle_dock"):
             self.l.toggle_dock()
-            self._dock_btn_text.set(self._dock_label())
-            self._refresh_split_state()
+            self._refresh_view_buttons()
             if not self.l.docked:
                 self.show_status("Split: move/resize each window freely", "success")
 
@@ -806,124 +711,8 @@ class CTkUI:
             logger.error(f"Failed to open File Transfer dialog: {e}", exc_info=True)
             self.show_status("Could not open File Transfer", "error")
 
-    def _on_save_preset(self):
-        name = self._preset_name_var.get().strip()
-        try:
-            self.l.store.save_preset(
-                name,
-                {
-                    "tx": self.l.tx,
-                    "ty": self.l.ty,
-                    "bx": self.l.bx,
-                    "by": self.l.by,
-                    "global_scale": self.l.global_scale,
-                },
-            )
-            self.invalidate_preset_cache()
-            self.refresh_preset_list()
-            self.show_status(f"Saved preset: {name}", "success")
-        except ValueError as e:
-            self.show_status(str(e), "error",
-                             duration=ERROR_STATUS_DURATION)
-        except Exception as e:
-            logger.error(f"Preset save error: {e}", exc_info=True)
-            self.show_status("Failed to save preset", "error")
-
-    def _on_load_preset(self, name):
-        data = self.l.store.get_preset(name)
-        if not data:
-            self.show_status(f"Preset '{name}' not found", "error")
-            return
-        self.l.tx = data.get("tx", self.l.tx)
-        self.l.ty = data.get("ty", self.l.ty)
-        self.l.bx = data.get("bx", self.l.bx)
-        self.l.by = data.get("by", self.l.by)
-        if "global_scale" in data:
-            self.l.set_scale_live(float(data["global_scale"]), keep_positions=False)
-            self.l.tx = data.get("tx", self.l.tx)
-            self.l.ty = data.get("ty", self.l.ty)
-            self.l.bx = data.get("bx", self.l.bx)
-            self.l.by = data.get("by", self.l.by)
-        self.l.save_layout()
-        self.l._resize_container_window()
-        self._sync_sliders_from_launcher()
-        self.force_window_sync()
-        self.show_status(f"Loaded preset: {name}", "success")
-
-    def _on_delete_preset(self, name):
-        deleted = self.l.store.delete_preset(name)
-        if deleted:
-            self.invalidate_preset_cache()
-            self.refresh_preset_list()
-            self.show_status(f"Deleted preset: {name}", "info")
-        else:
-            self.show_status(f"Preset '{name}' not found", "error")
-
     def _on_close(self):
         self.l.stop()
-
-    # Preset list
-    def refresh_preset_list(self):
-        """Destroy and rebuild the scrollable preset list."""
-        for w in self._preset_list_frame.winfo_children():
-            w.destroy()
-
-        presets = self.get_presets()
-
-        if not presets:
-            ctk.CTkLabel(
-                self._preset_list_frame,
-                text="It's so empty in here...",
-                text_color=BORDER_COLOUR,
-                font=make_font(18),
-            ).pack(pady=10)
-            return
-
-        for name in presets:
-            row = ctk.CTkFrame(
-                self._preset_list_frame,
-                fg_color="transparent",
-            )
-            row.pack(fill="x", pady=2)
-            row.columnconfigure(0, weight=1)
-
-            ctk.CTkLabel(
-                row, text=name,
-                text_color=TEXT_COLOUR,
-                anchor="w",
-                font=make_font(12),
-            ).grid(row=0, column=0, sticky="w", padx=6)
-
-            ctk.CTkButton(
-                row, text="Load", width=60,
-                fg_color=ACCENT_COLOUR,
-                hover_color="#3a7fc1",
-                font=make_font(12),
-                command=lambda n=name: self._on_load_preset(n),
-            ).grid(row=0, column=1, padx=(2, 2))
-
-            ctk.CTkButton(
-                row, text="Delete", width=64,
-                fg_color="#8b2020",
-                hover_color="#c0392b",
-                font=make_font(12),
-                command=lambda n=name: self._on_delete_preset(n),
-            ).grid(row=0, column=2, padx=(0, 4))
-
-    # Public helpers
-    def invalidate_preset_cache(self):
-        """Force preset list to reload on next access."""
-        self._preset_cache = None
-        logger.debug("Preset cache invalidated")
-
-    def get_presets(self):
-        """Return presets with a short TTL cache to reduce disk I/O."""
-        now = time.time()
-        if self._preset_cache is None or (now - self._preset_cache_time) > PRESET_CACHE_TIME:
-            self._preset_cache = self.l.store.load_all()
-            self._preset_cache_time = now
-            logger.debug(f"Preset cache refreshed: {len(self._preset_cache)} entries")
-        return self._preset_cache
 
     def show_status(
             self, msg,
@@ -1045,49 +834,32 @@ class CTkUI:
 
     # Internal helpers
     def _sync_sliders_from_launcher(self, skip=()):
-        """
-        Push current launcher state back into all slider widgets
-        """
-        # Keep the active-profile label in sync after a hot-swap
+        """Push current launcher state back into the panel widgets"""
         if hasattr(self, "_current_profile_label") and self.l.scrcpy:
             self._refresh_profile_label()
-
-        updates = {
-            "global_scale": self.l.global_scale,
-            "tx": self.l.tx,
-            "ty": self.l.ty,
-            "bx": self.l.bx,
-            "by": self.l.by,
-        }
-        for key, new_val in updates.items():
-            if key in skip:
-                continue
-            ref = self._slider_refs.get(key)
-            if ref is None or new_val is None:
-                continue
-            is_float = ref["is_float"]
-            if is_float:
-                v = round(float(new_val), 2)
-                ref["real"].set(v)
-                ref["entry"].set(f"{v:.2f}")
-            else:
-                v = int(new_val)
-                ref["real"].set(v)
-                ref["entry"].set(str(v))
-            ref["norm"].set(ref["to_norm"](v))
-
-        # Keep stream option dropdowns in sync too
         try:
             self._top_aspect_var.set(self.l.top_aspect)
             self._bottom_aspect_var.set(self.l.bottom_aspect)
             self._fps_var.set(f"{self.l.max_fps} FPS")
         except Exception:
             pass
+        self._refresh_view_buttons()
 
     def _update_loop(self):
         try:
             if not self.l.running:
                 return
+
+            # Run UI callbacks queued by other threads (Tk isn't thread-safe)
+            for _ in range(20):
+                try:
+                    fn = self.l.ui_calls.get_nowait()
+                except Exception:
+                    break
+                try:
+                    fn()
+                except Exception as e:
+                    logger.warning(f"Queued UI call failed: {e}")
 
             # A split window was closed -> put the screens back together
             if self.l._request_dock and not self.l.docked:
@@ -1100,7 +872,7 @@ class CTkUI:
             # Keep dock button label in sync with actual state
             expected = self._dock_label()
             if self._dock_btn_text.get() != expected:
-                self._dock_btn_text.set(expected)
+                self._refresh_view_buttons()
 
         except Exception as e:
             logger.error(f"Update loop error: {e}", exc_info=True)

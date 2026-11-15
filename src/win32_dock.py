@@ -255,6 +255,23 @@ def monitor_work_area(hwnd=None):
     return None
 
 
+def monitor_rect(hwnd=None):
+    """(left, top, right, bottom) of the WHOLE monitor (incl. taskbar) the window is on."""
+    try:
+        user32.MonitorFromWindow.restype = wintypes.HANDLE
+        user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_MONITORINFO)]
+        hmon = user32.MonitorFromWindow(hwnd or None, MONITOR_DEFAULTTONEAREST)
+        info = _MONITORINFO()
+        info.cbSize = ctypes.sizeof(_MONITORINFO)
+        if hmon and user32.GetMonitorInfoW(hmon, ctypes.byref(info)):
+            r = info.rcMonitor
+            return r.left, r.top, r.right, r.bottom
+    except Exception as e:
+        logger.error(f"monitor_rect failed: {e}")
+    return None
+
+
 def frame_insets(style, ex_style=0):
     """
     (left, top, right, bottom) thickness of the window frame/title bar for a

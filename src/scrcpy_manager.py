@@ -81,13 +81,24 @@ WIRELESS_MAX_SIZE_BOTTOM = 960
 # Audio
 AUDIO_MODES = ("pc", "device", "both")
 AUDIO_MODE_LABELS = {"pc": "PC", "device": "Device", "both": "Both"}
-AUDIO_LATENCY_MODES = ("auto", "low", "stable")
-AUDIO_LATENCY_LABELS = {"auto": "Auto", "low": "Low", "stable": "Stable"}
+# "Latency" profile: audio buffering + Wi-Fi stream size/bitrate together.
+# Low is the default - right for USB and strong Wi-Fi. If audio warps or
+# crackles, Balanced / Stable trade a little delay for smoothness.
+AUDIO_LATENCY_MODES = ("low", "auto", "stable")
+AUDIO_LATENCY_LABELS = {"low": "Low", "auto": "Balanced", "stable": "Stable"}
 AUDIO_BUFFER_MS = {
     # (usb, wireless)
-    "auto": (60, 150),
-    "low": (30, 80),
+    "low": (30, 50),
+    "auto": (60, 120),
     "stable": (120, 250),
+}
+AUDIO_OUTPUT_BUFFER_MS = {"low": 5, "auto": 10, "stable": 15}
+# Wi-Fi stream caps per latency profile: (top max size, bottom max size, Mbps per megapixel)
+# None = native resolution
+WIRELESS_PROFILE = {
+    "low": (None, None, 8),
+    "auto": (1280, 960, 6),
+    "stable": (1024, 800, 4),
 }
 AUDIO_BIT_RATE = "128K"
 
@@ -102,14 +113,30 @@ def valid_crop(crop):
         return False
 
 
-# Aspect-ratio crop presets: name -> width/height (None = full screen)
+# Aspect-ratio crop presets: label -> width/height (None = full screen).
+# The crop is centred and applied on the PC side (instant, no restart).
 ASPECT_PRESETS = {
-    "Full": None,
+    "Full screen": None,
+    "16:9  Switch / PSP / Vita / modern": 16 / 9,
     "16:10": 16 / 10,
-    "5:3": 5 / 3,
-    "3:2": 3 / 2,
-    "4:3": 4 / 3,
+    "5:3  3DS top": 5 / 3,
+    "3:2  GBA": 3 / 2,
+    "31:27  Thor bottom (native)": 31 / 27,
+    "4:3  DS / 3DS bottom / NES / SNES / N64 / PS1 / PS2 / GC / Genesis": 4 / 3,
+    "8:7  NES / SNES (pixel-perfect)": 8 / 7,
+    "10:9  Game Boy / GBC / Game Gear": 10 / 9,
+    "20:19  Neo Geo Pocket": 20 / 19,
+    "12:7  Virtual Boy": 12 / 7,
+    "1:1": 1.0,
 }
+# Old short names saved in configs from earlier versions
+ASPECT_ALIASES = {"Full": "Full screen", "4:3": "4:3  DS / 3DS bottom / NES / SNES / N64 / PS1 / PS2 / GC / Genesis",
+                  "3:2": "3:2  GBA", "5:3": "5:3  3DS top", "16:10": "16:10", "Detected": "Full screen"}
+
+
+def aspect_short(label):
+    """'4:3  DS / ...' -> '4:3' (for compact display)"""
+    return label.split("  ")[0]
 
 # Timing delays for process management
 DISPLAY_INIT_DELAY = 1.2  # Wait for first display to initialize
@@ -133,7 +160,7 @@ class ScrcpyManager:
 
     def __init__(self, profile, scale=None, scrcpy_bin=None,
                  adb_bin=None, enable_audio_top=True, max_fps=int(DEFAULT_MAX_FPS),
-                 audio_mode="pc", audio_latency="auto",
+                 audio_mode="pc", audio_latency="low",
                  crops=None):
         """
         Initialize the scrcpy manager.
@@ -149,7 +176,7 @@ class ScrcpyManager:
         self._scrcpy_log_handles = []
 
         self.audio_mode = audio_mode if audio_mode in AUDIO_MODES else "pc"
-        self.audio_latency = audio_latency if audio_latency in AUDIO_LATENCY_MODES else "auto"
+        self.audio_latency = audio_latency if audio_latency in AUDIO_LATENCY_MODES else "low"
         # Visible region of each screen as (left, top, right, bottom) fractions
         # of the full frame. Applied on the PC side (viewport), so changing it
         # never restarts the stream.
@@ -544,8 +571,11 @@ class ScrcpyManager:
         """
         cw, ch = width, height
         max_size = max(cw, ch)
+        top_cap, bottom_cap, wifi_rate = WIRELESS_PROFILE.get(self.audio_latency, WIRELESS_PROFILE["auto"])
         if self.is_wireless:
-            max_size = min(max_size, wireless_cap)
+            cap = top_cap if wireless_cap == WIRELESS_MAX_SIZE_TOP else bottom_cap
+            if cap:
+                max_size = min(max_size, cap)
         factor = max_size / max(cw, ch)
         stream_w, stream_h = int(cw * factor), int(ch * factor)
 
@@ -554,7 +584,7 @@ class ScrcpyManager:
             args = [a for a in custom_args if not self._is_audio_arg(a)]
         elif self.is_wireless:
             args = self.default_args(stream_w, stream_h, BITRATE_MIN_WIRELESS,
-                                     BITRATE_MBPS_PER_MP_WIRELESS, enable_audio=False)
+                                     wifi_rate, enable_audio=False)
         else:
             args = self.default_args(stream_w, stream_h, BITRATE_MIN_USB,
                                      BITRATE_MBPS_PER_MP_USB, enable_audio=False)
@@ -575,9 +605,9 @@ class ScrcpyManager:
         args = [
             f"--audio-bit-rate={AUDIO_BIT_RATE}",
             f"--audio-buffer={buffer_ms}",
-            # A slightly larger output buffer avoids Windows audio underruns,
-            # which scrcpy otherwise compensates for by resampling (warping).
-            "--audio-output-buffer=10",
+            # Output buffer: tiny for Low; slightly larger avoids Windows audio
+            # underruns, which scrcpy compensates for by resampling (warping).
+            f"--audio-output-buffer={AUDIO_OUTPUT_BUFFER_MS.get(self.audio_latency, 10)}",
         ]
         if self.audio_mode == "both":
             # Android 13+: capture playback while still playing on the device

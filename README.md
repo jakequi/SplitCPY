@@ -5,7 +5,7 @@
 </p>
 
 > [!IMPORTANT]
-> **DualCPY Split** is a fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest, adding Fit to Monitor, independent split windows, per-screen aspect cropping (e.g. 4:3), audio output/latency options and Wi-Fi audio fixes. See [CHANGELOG.md](CHANGELOG.md).
+> **DualCPY Split** is a fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest, adding an OBS-friendly stage (Both / Top / Bottom views, fullscreen, hotkeys), retro-system aspect presets, independent split windows, volume/audio output/latency options and Wi-Fi audio fixes. See [CHANGELOG.md](CHANGELOG.md).
 
 > [!NOTE]
 > Previously known as **ThorCPY**. As of v1.0.0, the project supports all dual-screen handhelds - not just the AYN Thor - and has been renamed to **DualCPY**.

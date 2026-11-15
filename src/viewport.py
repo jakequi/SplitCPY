@@ -229,6 +229,14 @@ class ViewportManager:
             user32.SetWindowPos(v.child, 0, *geom, SWP_NOZORDER | SWP_NOACTIVATE)
             v._last_inner = geom
 
+    def set_visible(self, key, visible):
+        v = self.views[key]
+        if not v.hwnd:
+            return
+        if bool(user32.IsWindowVisible(v.hwnd)) != bool(visible):
+            user32.ShowWindow(v.hwnd, 5 if visible else 0)  # SW_SHOW / SW_HIDE
+            v._last_outer = None
+
     def place_docked(self, key, x, y, w, h, force=False):
         """Position a viewport inside the container (combined mode)"""
         v = self.views[key]
@@ -257,6 +265,7 @@ class ViewportManager:
         for v in self.views.values():
             if not v.hwnd:
                 continue
+            user32.ShowWindow(v.hwnd, 5)  # a single-screen view may have hidden it
             x, y, r, b = self.client_screen_rect(v.key)
             user32.SetWindowLongW(v.hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN)
             user32.SetParent(v.hwnd, None)

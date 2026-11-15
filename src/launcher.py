@@ -22,6 +22,7 @@ import sys
 import time
 import ctypes
 import logging
+import queue
 import threading
 import subprocess
 import customtkinter as _ctk
@@ -39,9 +40,10 @@ from src.device_selector import show_device_selector
 from src.custom_profile_store import CustomProfileStore
 from src.control_panel import show_loading_screen, CTkUI
 from src.device_profile_editor import DeviceProfileEditorDialog
-from src.win32_dock import Win32Dock, monitor_work_area, frame_insets
+from src.win32_dock import Win32Dock, monitor_work_area, monitor_rect, frame_insets
 from src.viewport import ViewportManager, FULL_CROP
-from src.scrcpy_manager import valid_crop
+from src.scrcpy_manager import valid_crop, ASPECT_PRESETS, ASPECT_ALIASES
+from src import app_volume
 from src import process_guard
 from src.device_detection import detect_device, resolve_adb, get_device_info, get_display_list
 from src.ui_constants import resource_path
@@ -87,6 +89,23 @@ DOCKING_MONITOR_TIME_DELAY = 0.5
 # Math constants
 HALF = 0.5
 
+# Stage (combined window) view modes
+VIEW_MODES = ("both", "top", "bottom")
+MAX_SCREEN_GAP = 200
+
+# Global hotkeys (work while gaming / from OBS): Ctrl+Alt+<key>
+WM_SIZE = 0x0005
+WM_HOTKEY = 0x0312
+MOD_ALT, MOD_CONTROL, MOD_NOREPEAT = 0x0001, 0x0002, 0x4000
+HOTKEYS = {
+    1: (ord("1"), "both"),
+    2: (ord("2"), "top"),
+    3: (ord("3"), "bottom"),
+    4: (ord("S"), "cycle"),
+    5: (ord("F"), "fullscreen"),
+}
+WS_POPUP = 0x80000000
+
 
 class Launcher:
     """
@@ -127,10 +146,10 @@ class Launcher:
 
         # Stream options (applied by restarting the streams)
         self.audio_mode = self.config.get("audio_mode", "pc")
-        self.audio_latency = self.config.get("audio_latency", "auto")
+        self.audio_latency = self.config.get("audio_latency", "low")
         # Visible region of each screen (PC-side crop, no restart needed)
-        self.top_aspect = self.config.get("top_aspect", "Full")
-        self.bottom_aspect = self.config.get("bottom_aspect", "Full")
+        self.top_aspect = self._normalise_aspect(self.config.get("top_aspect", "Full screen"))
+        self.bottom_aspect = self._normalise_aspect(self.config.get("bottom_aspect", "Full screen"))
         self.crops = {}
         for key in ("top", "bottom"):
             crop = self.config.get(f"{key}_crop", None)
@@ -139,18 +158,38 @@ class Launcher:
             else:
                 # Older config: aspect name without a crop region -> start full
                 self.crops[key] = FULL_CROP
-                setattr(self, f"{key}_aspect", "Full")
+                setattr(self, f"{key}_aspect", "Full screen")
 
         # Stream restart / auto-reconnect state
         self._restarting = False
         self._reconnect_attempts = 0
         self._last_reconnect = 0.0
 
-        # True after "Fit to Monitor" until the user resizes/moves manually,
-        # so crop changes re-fit automatically
-        self._fitted = False
+        # Stage: which screen(s) the combined window shows, gap between them
+        self.view_mode = self.config.get("view_mode", "both")
+        if self.view_mode not in VIEW_MODES:
+            self.view_mode = "both"
+        try:
+            self.screen_gap = max(0, min(MAX_SCREEN_GAP, int(self.config.get("screen_gap", 0))))
+        except (TypeError, ValueError):
+            self.screen_gap = 0
+        self.view_rects = {}            # key -> (x, y, w, h) in container client coords
+        self.fullscreen = False
+        self._normal_placement = None   # (style, rect) to restore after fullscreen
+
+        # PC volume of the stream (0-100), applied to scrcpy's audio session
+        try:
+            self.volume = max(0, min(100, int(self.config.get("volume", 100))))
+        except (TypeError, ValueError):
+            self.volume = 100
+        self._volume_applied_pid = None
+
         # Set from the viewport thread when a split window is closed
         self._request_dock = False
+
+        # Tk is not thread-safe: other threads queue UI callbacks here and the
+        # control panel runs them on the Tk thread (see CTkUI._update_loop)
+        self.ui_calls = queue.Queue()
 
         # Layout attributes
         self.scrcpy = None
@@ -236,6 +275,11 @@ class Launcher:
         except Exception as e:
             logger.error(f"Failed to save device scale: {e}")
 
+    @staticmethod
+    def _normalise_aspect(name):
+        name = ASPECT_ALIASES.get(name, name)
+        return name if name in ASPECT_PRESETS else "Full screen"
+
     def _make_manager(self, profile, scale):
         """Create a ScrcpyManager with all current stream options applied"""
         return ScrcpyManager(
@@ -252,10 +296,15 @@ class Launcher:
         self.tx, self.ty, self.bx, self.by = layout["tx"], layout["ty"], layout["bx"], layout["by"]
 
     def _container_client_size(self):
-        """Client size that fits both screens at their current positions"""
-        right = max(self.tx + self.scrcpy.f_w1, self.bx + self.scrcpy.f_w2)
-        bottom = max(self.ty + self.scrcpy.f_h1, self.by + self.scrcpy.f_h2)
-        return max(1, int(right)), max(1, int(bottom))
+        """Initial client size: last saved size, else both screens stacked at the current scale"""
+        saved = self.config.get("container_client", None)
+        try:
+            if saved and int(saved[0]) >= 160 and int(saved[1]) >= 160:
+                return int(saved[0]), int(saved[1])
+        except (TypeError, ValueError, IndexError):
+            pass
+        s = self.scrcpy
+        return max(1, max(s.f_w1, s.f_w2)), max(1, s.f_h1 + s.f_h2 + self.screen_gap)
 
     def get_default_layout(self):
         """
@@ -285,6 +334,11 @@ class Launcher:
             cfg["bx"] = self.bx
             cfg["by"] = self.by
             cfg["global_scale"] = self.global_scale
+            cfg["view_mode"] = self.view_mode
+            cfg["screen_gap"] = self.screen_gap
+            placement = self._container_placement()
+            if placement:
+                cfg["container_pos"], cfg["container_client"] = placement
 
             if self.scrcpy and getattr(self.scrcpy, "profile", None):
                 cfg["last_profile"] = self.scrcpy.profile.name
@@ -336,24 +390,29 @@ class Launcher:
                 self.stop()
                 return 0
 
-            if self.scrcpy is None or self.tx is None:
-                return self.user32.DefWindowProcW(hwnd, msg, wp, lp)
+            try:
+                if msg == WM_SIZE:
+                    # The stage always fills the window: re-layout on every resize
+                    self.layout_windows()
 
-            # Handle activation when the mouse enters/clicks the container
-            if msg == WM_MOUSEACTIVATE:
-                # Get mouse position relative to container
-                pt = wintypes.POINT()
-                self.user32.GetCursorPos(ctypes.byref(pt))
-                self.user32.ScreenToClient(hwnd, ctypes.byref(pt))
+                elif msg == WM_HOTKEY:
+                    self._on_hotkey(int(wp))
+                    return 0
 
-                # Check if mouse is over top or bottom screen and force focus
-                if (self.tx <= pt.x <= self.tx + self.scrcpy.f_w1 and
-                        self.ty <= pt.y <= self.ty + self.scrcpy.f_h1):
-                    self.dock.force_focus(self.dock.hwnd_top)
-                elif (self.bx <= pt.x <= self.bx + self.scrcpy.f_w2 and
-                      self.by <= pt.y <= self.by + self.scrcpy.f_h2):
-                    self.dock.force_focus(self.dock.hwnd_bottom)
-                return MA_ACTIVATE
+                elif msg == WM_MOUSEACTIVATE and self.scrcpy is not None:
+                    # Focus whichever screen is under the cursor
+                    pt = wintypes.POINT()
+                    self.user32.GetCursorPos(ctypes.byref(pt))
+                    self.user32.ScreenToClient(hwnd, ctypes.byref(pt))
+                    for key, rect in self.view_rects.items():
+                        x, y, w, h = rect
+                        if x <= pt.x < x + w and y <= pt.y < y + h:
+                            child = self.dock.hwnd_top if key == "top" else self.dock.hwnd_bottom
+                            self.dock.force_focus(child)
+                            break
+                    return MA_ACTIVATE
+            except Exception as e:
+                logger.error(f"Container wndproc error: {e}")
 
             return self.user32.DefWindowProcW(hwnd, msg, wp, lp)
 
@@ -569,8 +628,7 @@ class Launcher:
                 "DualCPYBridge",
                 window_title,
                 style,
-                DEFAULT_CONTAINER_X,
-                DEFAULT_CONTAINER_Y,
+                *self._initial_container_pos(),
                 rect.right - rect.left,
                 rect.bottom - rect.top,
                 None,
@@ -595,6 +653,11 @@ class Launcher:
                     self.layout_windows(force=True)
                 except Exception as e:
                     logger.error(f"Failed to create viewports: {e}", exc_info=True)
+
+                # Global hotkeys must be registered on the thread that owns hwnd
+                for hk_id, (vk, action) in HOTKEYS.items():
+                    if not self.user32.RegisterHotKey(hwnd, hk_id, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, vk):
+                        logger.warning(f"Hotkey Ctrl+Alt+{chr(vk)} ({action}) is in use by another app")
 
             # Run the message loop for the container window
             msg = wintypes.MSG()
@@ -631,6 +694,8 @@ class Launcher:
                             self.viewports.adopt("bottom", bottom)
                             self.dock.hwnd_bottom = bottom
                 self._check_stream_health()
+                if self.audio_mode != "device" and not self._restarting:
+                    self._apply_volume()
             except Exception as e:
                 logger.error(f"Docking monitor error: {e}", exc_info=True)
             time.sleep(DOCKING_MONITOR_TIME_DELAY)
@@ -647,17 +712,183 @@ class Launcher:
         device = getattr(self, "device_model", None) or self.scrcpy.profile.name
         self.viewports.set_titles(f"{device} | Top Screen", f"{device} | Bottom Screen")
 
+    # ------------------------------------------------------------------
+    # Stage layout (combined window)
+    # ------------------------------------------------------------------
+    def stage_layout(self, cw, ch):
+        """
+        Where each screen goes in a cw x ch window for the current view mode.
+        Screens keep their aspect and are as large as possible, centred
+        (so a single screen fills the height with natural side bars).
+        Returns {"top": (x, y, w, h) or None, "bottom": ...}.
+        """
+        s = self.scrcpy
+        w1, h1, w2, h2 = s.content_sizes(1.0)
+        g = self.screen_gap if self.view_mode == "both" else 0
+        rects = {"top": None, "bottom": None}
+        if cw <= 0 or ch <= 0:
+            return rects
+        if self.view_mode == "both":
+            k = max(0.01, min(cw / max(w1, w2), (ch - g) / (h1 + h2)))
+            tw, th, bw, bh = w1 * k, h1 * k, w2 * k, h2 * k
+            y0 = (ch - (th + bh + g)) / 2
+            rects["top"] = ((cw - tw) / 2, y0, tw, th)
+            rects["bottom"] = ((cw - bw) / 2, y0 + th + g, bw, bh)
+        else:
+            w, h = (w1, h1) if self.view_mode == "top" else (w2, h2)
+            k = min(cw / w, ch / h)
+            rects[self.view_mode] = ((cw - w * k) / 2, (ch - h * k) / 2, w * k, h * k)
+        return {key: (tuple(int(round(v)) for v in r) if r else None) for key, r in rects.items()}
+
     def layout_windows(self, force=False):
-        """Place the viewports inside the container (combined mode)"""
-        if not self.scrcpy or self.tx is None or not self.viewports.ready():
+        """Lay out the viewports inside the container for the current view"""
+        if not self.scrcpy or not self.viewports.ready() or not self.hwnd_container:
             return
-        if self.docked:
-            s = self.scrcpy
-            self.viewports.place_docked("top", self.tx, self.ty, s.f_w1, s.f_h1, force=force)
-            self.viewports.place_docked("bottom", self.bx, self.by, s.f_w2, s.f_h2, force=force)
-        elif force:
-            self.viewports.layout_inner("top", force=True)
-            self.viewports.layout_inner("bottom", force=True)
+        if not self.docked:
+            if force:
+                self.viewports.layout_inner("top", force=True)
+                self.viewports.layout_inner("bottom", force=True)
+            return
+        rc = wintypes.RECT()
+        self.user32.GetClientRect(self.hwnd_container, ctypes.byref(rc))
+        rects = self.stage_layout(rc.right, rc.bottom)
+        visible = {}
+        for key, rect in rects.items():
+            if rect:
+                self.viewports.set_visible(key, True)
+                self.viewports.place_docked(key, *rect, force=force)
+                visible[key] = rect
+            else:
+                self.viewports.set_visible(key, False)
+        self.view_rects = visible
+
+    def set_view_mode(self, mode):
+        """Show both screens stacked, or just the top / bottom (filling the window)"""
+        if mode == "cycle":
+            mode = VIEW_MODES[(VIEW_MODES.index(self.view_mode) + 1) % len(VIEW_MODES)]
+        if mode not in VIEW_MODES:
+            return
+        self.view_mode = mode
+        logger.info(f"View mode -> {mode}")
+        self.layout_windows(force=True)
+        try:
+            self.config.set("view_mode", mode)
+        except Exception:
+            pass
+        ui = getattr(self, "ui", None)
+        if ui:
+            try:
+                self.ui_calls.put(ui._refresh_view_buttons)
+            except Exception:
+                pass
+
+    def set_screen_gap(self, gap):
+        self.screen_gap = max(0, min(MAX_SCREEN_GAP, int(gap)))
+        self.layout_windows(force=True)
+
+    def _on_hotkey(self, hk_id):
+        action = HOTKEYS.get(hk_id, (None, None))[1]
+        if action == "fullscreen":
+            self.toggle_fullscreen()
+        elif action:
+            if not self.docked:
+                return
+            self.set_view_mode(action)
+
+    def toggle_fullscreen(self):
+        """Borderless fullscreen of the combined window on its monitor (great for OBS)"""
+        if not self.hwnd_container:
+            return
+        if not self.docked:
+            self.toggle_dock()
+        GWL_STYLE = -16
+        hwnd = self.hwnd_container
+        if not self.fullscreen:
+            rect = wintypes.RECT()
+            self.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+            self._normal_placement = (self.user32.GetWindowLongW(hwnd, GWL_STYLE),
+                                      (rect.left, rect.top, rect.right, rect.bottom))
+            mon = monitor_rect(hwnd)
+            if not mon:
+                return
+            self.user32.SetWindowLongW(hwnd, GWL_STYLE,
+                                       WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS)
+            l, t, r, b = mon
+            self.user32.SetWindowPos(hwnd, 0, l, t, r - l, b - t, 0x0020 | 0x0040)  # FRAMECHANGED|SHOWWINDOW
+            self.fullscreen = True
+        else:
+            style, (l, t, r, b) = self._normal_placement or (
+                WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, (100, 100, 1000, 900))
+            self.user32.SetWindowLongW(hwnd, GWL_STYLE, style)
+            self.user32.SetWindowPos(hwnd, 0, l, t, r - l, b - t, 0x0020 | 0x0040)
+            self.fullscreen = False
+            enable_dark_titlebar(hwnd)
+        self.layout_windows(force=True)
+        logger.info(f"Fullscreen -> {self.fullscreen}")
+        ui = getattr(self, "ui", None)
+        if ui:
+            try:
+                self.ui_calls.put(ui._refresh_view_buttons)
+            except Exception:
+                pass
+
+    def _container_placement(self):
+        """((x, y), (client_w, client_h)) of the normal (non-fullscreen) container"""
+        if not self.hwnd_container or not self.user32.IsWindow(self.hwnd_container):
+            return None
+        if self.fullscreen and self._normal_placement:
+            _, (l, t, r, b) = self._normal_placement
+            il, it, ir, ib = frame_insets(WS_OVERLAPPEDWINDOW, WS_EX_CONTROLPARENT)
+            return [l, t], [r - l - il - ir, b - t - it - ib]
+        if self.user32.IsIconic(self.hwnd_container) or self.user32.IsZoomed(self.hwnd_container):
+            return None
+        rect = wintypes.RECT()
+        self.user32.GetWindowRect(self.hwnd_container, ctypes.byref(rect))
+        rc = wintypes.RECT()
+        self.user32.GetClientRect(self.hwnd_container, ctypes.byref(rc))
+        if rc.right < 50 or rc.bottom < 50:
+            return None
+        return [rect.left, rect.top], [rc.right, rc.bottom]
+
+    def _initial_container_pos(self):
+        pos = self.config.get("container_pos", None)
+        try:
+            x, y = int(pos[0]), int(pos[1])
+            # Only reuse it if it's still on a monitor
+            MONITOR_DEFAULTTONULL = 0
+            pt = wintypes.POINT(x + 50, y + 20)
+            self.user32.MonitorFromPoint.restype = wintypes.HANDLE
+            if self.user32.MonitorFromPoint(pt, MONITOR_DEFAULTTONULL):
+                return x, y
+        except (TypeError, ValueError, IndexError):
+            pass
+        return DEFAULT_CONTAINER_X, DEFAULT_CONTAINER_Y
+
+    # ------------------------------------------------------------------
+    # Volume
+    # ------------------------------------------------------------------
+    def set_volume(self, volume):
+        """PC volume of the stream, 0-100 (Windows per-app volume of scrcpy)"""
+        self.volume = max(0, min(100, int(volume)))
+        self._volume_applied_pid = None
+        threading.Thread(target=self._apply_volume, daemon=True).start()
+
+    def save_volume(self):
+        try:
+            self.config.set("volume", self.volume)
+        except Exception:
+            pass
+
+    def _apply_volume(self):
+        """Apply the volume to the top scrcpy's audio session if it exists yet"""
+        procs = list(getattr(self.scrcpy, "processes", []) or [])
+        if not procs:
+            return
+        pid = procs[0].pid
+        if self._volume_applied_pid == pid:
+            return
+        if app_volume.set_process_volume([p.pid for p in procs], self.volume / 100.0):
+            self._volume_applied_pid = pid
 
     def _resize_split_windows(self):
         s = self.scrcpy
@@ -672,12 +903,10 @@ class Launcher:
     # Crop (aspect) - instant, never restarts the stream
     # ------------------------------------------------------------------
     def set_crop(self, key, crop, aspect_name):
-        """Show only `crop` (fractions of the full frame) of one screen"""
+        """Show only `crop` (fractions of the full frame) of one screen. Instant."""
         if not self.scrcpy or not valid_crop(crop):
             return False
         crop = tuple(round(float(c), 4) for c in crop)
-        was_default = (self.tx, self.ty, self.bx, self.by) == tuple(self.get_default_layout().values())
-
         self.crops[key] = crop
         setattr(self, f"{key}_aspect", aspect_name)
         self.scrcpy.crops[key] = crop
@@ -692,38 +921,30 @@ class Launcher:
             logger.warning(f"Failed to persist crop: {e}")
         logger.info(f"Crop {key} -> {aspect_name} {crop}")
 
-        if self._fitted:
-            self.fit_to_monitor()
-            return True
-        if was_default:
-            self._apply_default_layout()
         if self.docked:
-            self._resize_container_window()
             self.layout_windows(force=True)
         else:
-            s = self.scrcpy
-            w, h = (s.f_w1, s.f_h1) if key == "top" else (s.f_w2, s.f_h2)
-            self.viewports.resize_split(key, w, h)
-        self.save_layout()
+            # Keep the split window's width, adjust its height to the new shape
+            w, _ = self.viewports.client_size(key)
+            l, t, r, b = crop
+            aspect = self.scrcpy.full_aspect(key) * (r - l) / (b - t)
+            if w > 0:
+                self.viewports.resize_split(key, w, int(round(w / aspect)))
         return True
-
-    def show_full_frame(self, key):
-        """Temporarily show the whole frame in a viewport (for detection)"""
-        self.viewports.layout_inner(key, crop=FULL_CROP, force=True)
-
-    def restore_crop_view(self, key):
-        self.viewports.layout_inner(key, force=True)
 
     def capture_rect(self, key=None):
         """Screen rect to capture: the container (combined) or one viewport"""
         if key is None:
-            if not self.hwnd_container:
+            # Bounding box of the visible screens (no surrounding black)
+            if not self.hwnd_container or not self.view_rects:
                 return None
-            rc = wintypes.RECT()
-            self.user32.GetClientRect(self.hwnd_container, ctypes.byref(rc))
             pt = wintypes.POINT(0, 0)
             self.user32.ClientToScreen(self.hwnd_container, ctypes.byref(pt))
-            return pt.x, pt.y, pt.x + rc.right, pt.y + rc.bottom
+            xs = [r[0] for r in self.view_rects.values()]
+            ys = [r[1] for r in self.view_rects.values()]
+            xe = [r[0] + r[2] for r in self.view_rects.values()]
+            ye = [r[1] + r[3] for r in self.view_rects.values()]
+            return pt.x + min(xs), pt.y + min(ys), pt.x + max(xe), pt.y + max(ye)
         return self.viewports.client_screen_rect(key)
 
     def bring_to_front(self, key=None):
@@ -744,7 +965,7 @@ class Launcher:
         ui = getattr(self, "ui", None)
         if ui and ui.window:
             try:
-                ui.window.after(0, lambda: ui.show_status(msg, kind, duration=4.0))
+                self.ui_calls.put(lambda: ui.show_status(msg, kind, duration=4.0))
             except Exception:
                 pass
 
@@ -807,6 +1028,7 @@ class Launcher:
                 self.scrcpy = new
 
                 new.start_scrcpy(serial=serial)
+                self._volume_applied_pid = None
                 self._notify("Streams restarted", "success")
             except Exception as e:
                 logger.error(f"Stream restart failed: {e}", exc_info=True)
@@ -833,81 +1055,35 @@ class Launcher:
     # ------------------------------------------------------------------
     # Live scaling / fit to monitor
     # ------------------------------------------------------------------
-    def set_scale_live(self, scale, keep_positions=True):
-        """
-        Change the window scale immediately (no restart). The stream keeps
-        its resolution; only the on-screen size changes.
-        """
-        if not self.scrcpy or scale <= 0:
-            return
-        old = self.scrcpy.scale or scale
-        self.scrcpy.set_scale(scale)
-        self.global_scale = scale
-        self.launch_scale = scale
-        if keep_positions and old:
-            k = scale / old
-            self.tx, self.ty = int(round(self.tx * k)), int(round(self.ty * k))
-            self.bx, self.by = int(round(self.bx * k)), int(round(self.by * k))
-        else:
-            self._apply_default_layout()
-        if self.docked:
-            self._resize_container_window()
-            self.layout_windows(force=True)
-        else:
-            self._resize_split_windows()
-        self.save_scale()
-
     def fit_to_monitor(self):
         """
-        Make both screens as large as possible on the current monitor, stacked
-        top-over-bottom and centred. Works combined (resizes/moves the
-        container) and split (stacks the two windows).
-        Returns the new scale, or None on failure.
+        Combined: maximise the window (the stage scales the screens to fill it).
+        Split: stack the two windows, as large as possible, centred on the monitor.
         """
         if not self.scrcpy:
             return None
-        ref = self.hwnd_container if self.docked else self.viewports.views["top"].hwnd
-        work = monitor_work_area(ref)
+        if self.docked:
+            if self.fullscreen:
+                self.toggle_fullscreen()
+            self.user32.ShowWindow(self.hwnd_container, 3)  # SW_MAXIMIZE
+            return True
+
+        work = monitor_work_area(self.viewports.views["top"].hwnd)
         if not work:
             return None
         wl, wt, wr, wb = work
         avail_w, avail_h = wr - wl, wb - wt
-
         w1, h1, w2, h2 = self.scrcpy.content_sizes(1.0)
-        if self.docked:
-            il, it, ir, ib = frame_insets(WS_OVERLAPPEDWINDOW, WS_EX_CONTROLPARENT)
-            scale = min((avail_w - il - ir) / max(w1, w2), (avail_h - it - ib) / (h1 + h2))
-        else:
-            il, it, ir, ib = frame_insets(WS_OVERLAPPEDWINDOW, 0)
-            scale = min((avail_w - il - ir) / max(w1, w2), (avail_h - 2 * (it + ib)) / (h1 + h2))
-        scale = max(0.1, round(scale - 0.0005, 3))
-
-        self.set_scale_live(scale, keep_positions=False)
-        s = self.scrcpy
-
-        if self.docked:
-            cw, ch = self._container_client_size()
-            rect = wintypes.RECT(0, 0, cw, ch)
-            self.user32.AdjustWindowRectEx(
-                ctypes.byref(rect), WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-                False, WS_EX_CONTROLPARENT)
-            outer_w, outer_h = rect.right - rect.left, rect.bottom - rect.top
-            x = wl + (avail_w - outer_w) // 2
-            y = wt + (avail_h - outer_h) // 2
-            self.user32.ShowWindow(self.hwnd_container, 9)  # SW_RESTORE
-            self.user32.SetWindowPos(self.hwnd_container, 0, x, y, outer_w, outer_h, 0x0004 | 0x0010)
-        else:
-            outer_total = s.f_h1 + s.f_h2 + 2 * (it + ib)
-            top_y = wt + (avail_h - outer_total) // 2 + it
-            bottom_y = top_y + s.f_h1 + ib + it
-            cx = wl + avail_w // 2
-            self.viewports.resize_split("top", s.f_w1, s.f_h1, cx - s.f_w1 // 2, top_y)
-            self.viewports.resize_split("bottom", s.f_w2, s.f_h2, cx - s.f_w2 // 2, bottom_y)
-
-        self._fitted = True
-        self.save_layout()
-        logger.info(f"Fit to monitor: scale {scale}, work area {work}")
-        return scale
+        il, it, ir, ib = frame_insets(WS_OVERLAPPEDWINDOW, 0)
+        k = min((avail_w - il - ir) / max(w1, w2), (avail_h - 2 * (it + ib)) / (h1 + h2))
+        tw, th, bw, bh = (int(v * k) for v in (w1, h1, w2, h2))
+        top_y = wt + (avail_h - (th + bh + 2 * (it + ib))) // 2 + it
+        bottom_y = top_y + th + ib + it
+        cx = wl + avail_w // 2
+        self.viewports.resize_split("top", tw, th, cx - tw // 2, top_y)
+        self.viewports.resize_split("bottom", bw, bh, cx - bw // 2, bottom_y)
+        logger.info(f"Split windows fitted to monitor {work}")
+        return True
 
     def toggle_dock(self):
         """
@@ -922,6 +1098,13 @@ class Launcher:
         with self.dock_lock:
             if self.docked:
                 logger.info("Splitting windows")
+                if self.fullscreen:
+                    self.toggle_fullscreen()
+                # Lay both screens out first so both split windows get a sensible size
+                saved_mode = self.view_mode
+                self.view_mode = "both"
+                self.layout_windows(force=True)
+                self.view_mode = saved_mode
                 self.docked = False
                 self.viewports.to_split()
                 self.user32.ShowWindow(self.hwnd_container, SW_HIDE)
@@ -932,13 +1115,9 @@ class Launcher:
                 self.user32.ShowWindow(self.hwnd_container, SW_SHOW)
                 self.viewports.to_docked(self.hwnd_container)
                 self.docked = True
-                self._resize_container_window()
                 self.layout_windows(force=True)
                 logger.info("Windows combined")
         self._request_dock = False
-        # Keep "Fit to Monitor" in effect across split/combine
-        if self._fitted:
-            self.fit_to_monitor()
 
     def show_connection_dialog(self):
         """
@@ -1285,7 +1464,6 @@ class Launcher:
             return
 
         self.save_layout()
-        self._resize_container_window()
         self.layout_windows(force=True)
 
         # Sync UI
@@ -1297,7 +1475,7 @@ class Launcher:
                 except Exception as e:
                     logger.warning(f"UI sync after profile switch failed: {e}")
 
-            self.ui.window.after(0, _sync)
+            self.ui_calls.put(_sync)
 
     def stop(self):
         """

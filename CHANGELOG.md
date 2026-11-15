@@ -5,30 +5,30 @@
 Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 
 ### Added
-- **Detect Game Area**: finds the game's picture and crops the black bars away exactly (4:3, integer-scaled, anything) - per screen or both
-- Aspect crop is done on the PC side, so changing it is instant and never restarts the stream
-- **Fit to Monitor**: one click makes both screens as large as possible, stacked and centred on the current monitor (works combined and split)
-- **Split Windows**: two fully independent windows you can move, resize and capture separately; positions are remembered across stream restarts
-- **Per-screen aspect presets** (Full / 16:10 / 5:3 / 3:2 / 4:3)
+- **View: Both / Top / Bottom** - the combined window is now a stage that always fills itself: Both stacks the screens, Top / Bottom show one screen as large as fits (natural side bars). Made for OBS Window Capture
+- **Fullscreen** (borderless, on the window's monitor) and a **Gap** slider between stacked screens
+- **Global hotkeys** (work in-game): Ctrl+Alt+1 Both, Ctrl+Alt+2 Top, Ctrl+Alt+3 Bottom, Ctrl+Alt+S cycle, Ctrl+Alt+F fullscreen
+- **Aspect presets for retro systems** (DS, 3DS top, GBA, Game Boy, NES/SNES, Virtual Boy, Neo Geo Pocket, Thor bottom 31:27, ...) - cropping is done on the PC side, so it's instant and never restarts the stream
+- **Volume slider** (sets the stream's volume in the Windows mixer)
 - **Audio output** setting: PC, Device (keep sound on the handheld) or Both (Android 13+)
-- **Audio latency** setting: Auto / Low / Stable
+- **Latency** setting: Low (default; full quality, smallest buffers), Balanced, Stable
+- **Split Windows**: two independent windows you can move, resize (aspect-locked) and capture separately; closing one recombines them
+- **Fit to Monitor**: maximise the window, or stack split windows as large as possible
 - Auto-reconnect when a stream drops (up to 3 attempts)
 - Split-mode screenshots (both windows stacked into one image)
 
 ### Changed
-- Wi-Fi streams use far less bandwidth (~10 Mbps instead of ~48 Mbps) and a larger audio buffer, fixing audio speeding up / slowing down / pitch warping
-- USB streams at native resolution, so resizing never needs a restart
-- Size slider applies instantly (no restart)
-- Changing FPS / audio / aspect restarts just the streams automatically, not the whole app
-- Reorganised control panel into Screens / Position / Stream / Tools / Presets with short explanations
-- Position values typed in the boxes are no longer clamped
+- Reorganised control panel (View / Aspect / Audio & Stream / Tools); manual position sliders, size slider and layout presets replaced by the self-fitting stage
+- Window size and position are remembered between launches
+- Changing FPS / audio restarts just the streams, not the whole app
+- Wi-Fi bitrate is tied to the Latency setting (Balanced/Stable use less bandwidth if audio warps)
 - On exit the wireless connection is dropped and the bundled adb server is shut down (no more piled-up adb.exe)
 - scrcpy and adb are tied to DualCPY with a Windows job object, so they always close with it - even after a crash
-- Closing a split window puts the screens back together instead of killing the stream
 
 ### Bugfixes
-- Screenshot button could crash the app (replaced dxcam capture with Windows screen capture; also works across monitors)
+- Screenshot button could crash the app (replaced dxcam with Windows screen capture; works on any monitor)
 - Overlapping stream restarts could orphan scrcpy processes that kept playing audio in the background
+- UI updates from background threads could crash Tk (now queued to the UI thread)
 - Status messages disappeared after the first one
 - Running from source crashed on an incorrect `ui_constants` import
 - Wireless-debugging (mDNS) serials weren't recognised as wireless
