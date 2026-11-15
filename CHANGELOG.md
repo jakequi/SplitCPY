@@ -9,7 +9,7 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 - **Fullscreen**: the game area is centred on the monitor at the largest size, over a separate black backdrop window that OBS's Window Capture never sees
 - **Gap** slider between stacked screens
 - **Global hotkeys** (work in-game): Ctrl+Alt+1 Both, Ctrl+Alt+2 Top, Ctrl+Alt+3 Bottom, Ctrl+Alt+S cycle, Ctrl+Alt+F fullscreen
-- **Aspect presets per console** - "Console (ratio)", alphabetical (3DS, DS, GBA, Game Boy, NES/SNES incl. pixel-perfect 8:7, PlayStation, Saturn, Switch, Thor Bottom Screen 31:27, Virtual Boy, WonderSwan, ...). Cropping is done on the PC side, so it's instant and never restarts the stream
+- **Aspect presets by ratio** - e.g. "4:3 (DS, NES, SNES, PlayStation, ...)", "3:2 (Game Boy Advance)", "31:27 (Thor Bottom Screen)", sorted numerically. Cropping is done on the PC side, so it's instant and never restarts the stream
 - **Profiles**: save the whole setup (view, aspect, gap, volume, audio, latency, FPS, split/combined); star one as default to load on start-up
 - **Device profiles toggle** (Settings): off = always use the built-in AYN Thor profile, no device selector
 - **Ctrl+Alt+M** shows/hides the control panel, even over fullscreen

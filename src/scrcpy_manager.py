@@ -113,70 +113,72 @@ def valid_crop(crop):
         return False
 
 
-# Aspect-ratio crop presets: "Console (ratio)" -> width/height.
+# Aspect-ratio crop presets, one per ratio: "4:3 (DS, NES, ...)" -> width/height.
+# Sorted numerically by ratio; consoles alphabetical inside the brackets.
 # The crop is centred and applied on the PC side (instant, no restart).
 FULL_SCREEN_LABEL = "Full Screen (no crop)"
-_CONSOLE_ASPECTS = {
-    "3DS Bottom (4:3)": 4 / 3,
-    "3DS Top (5:3)": 5 / 3,
-    "Arcade (4:3)": 4 / 3,
-    "Atari Lynx (80:51)": 80 / 51,
-    "Dreamcast (4:3)": 4 / 3,
-    "DS (4:3)": 4 / 3,
-    "Game Boy (10:9)": 10 / 9,
-    "Game Boy Advance (3:2)": 3 / 2,
-    "Game Boy Color (10:9)": 10 / 9,
-    "Game Gear (10:9)": 10 / 9,
-    "GameCube (4:3)": 4 / 3,
-    "Genesis / Mega Drive (4:3)": 4 / 3,
-    "Neo Geo Pocket (20:19)": 20 / 19,
-    "NES (4:3)": 4 / 3,
-    "NES Pixel-Perfect (8:7)": 8 / 7,
-    "Nintendo 64 (4:3)": 4 / 3,
-    "PC Engine / TurboGrafx-16 (4:3)": 4 / 3,
-    "PlayStation (4:3)": 4 / 3,
-    "PlayStation 2 (4:3)": 4 / 3,
-    "PS Vita (16:9)": 16 / 9,
-    "PSP (16:9)": 16 / 9,
-    "Saturn (4:3)": 4 / 3,
-    "SNES (4:3)": 4 / 3,
-    "SNES Pixel-Perfect (8:7)": 8 / 7,
-    "Square (1:1)": 1.0,
-    "Switch (16:9)": 16 / 9,
-    "Thor Bottom Screen (31:27)": 31 / 27,
-    "Virtual Boy (12:7)": 12 / 7,
-    "Widescreen (16:10)": 16 / 10,
-    "Widescreen (16:9)": 16 / 9,
-    "WonderSwan (14:9)": 14 / 9,
-}
-ASPECT_PRESETS = {FULL_SCREEN_LABEL: None}
-ASPECT_PRESETS.update(sorted(_CONSOLE_ASPECTS.items(), key=lambda kv: kv[0].lower()))
 
-# Names saved in configs/profiles by earlier versions
+# ratio -> consoles / uses that display at that ratio
+_RATIO_CONSOLES = {
+    (1, 1): ["Square"],
+    (3, 2): ["Game Boy Advance"],
+    (4, 3): ["3DS Bottom", "Arcade", "Dreamcast", "DS", "GameCube", "Genesis / Mega Drive",
+             "NES", "Nintendo 64", "PC Engine / TurboGrafx-16", "PlayStation", "PlayStation 2",
+             "Saturn", "SNES"],
+    (5, 3): ["3DS Top"],
+    (8, 7): ["NES / SNES Pixel-Perfect"],
+    (10, 9): ["Game Boy", "Game Boy Color", "Game Gear"],
+    (12, 7): ["Virtual Boy"],
+    (14, 9): ["WonderSwan"],
+    (16, 9): ["PS Vita", "PSP", "Switch", "Widescreen"],
+    (16, 10): ["Widescreen"],
+    (20, 19): ["Neo Geo Pocket"],
+    (31, 27): ["Thor Bottom Screen"],
+    (80, 51): ["Atari Lynx"],
+}
+
+
+def _ratio_label(w, h):
+    names = sorted(_RATIO_CONSOLES[(w, h)], key=str.lower)
+    return f"{w}:{h} ({', '.join(names)})"
+
+
+ASPECT_PRESETS = {FULL_SCREEN_LABEL: None}
+for _w, _h in sorted(_RATIO_CONSOLES):
+    ASPECT_PRESETS[_ratio_label(_w, _h)] = _w / _h
+
+# Names saved in configs/profiles by earlier versions -> current label
 ASPECT_ALIASES = {
     "Full": FULL_SCREEN_LABEL,
     "Full screen": FULL_SCREEN_LABEL,
     "Detected": FULL_SCREEN_LABEL,
-    "4:3": "DS (4:3)",
-    "3:2": "Game Boy Advance (3:2)",
-    "5:3": "3DS Top (5:3)",
-    "16:10": "Widescreen (16:10)",
-    "1:1": "Square (1:1)",
-    "16:9  Switch / PSP / Vita / modern": "Widescreen (16:9)",
-    "5:3  3DS top": "3DS Top (5:3)",
-    "3:2  GBA": "Game Boy Advance (3:2)",
-    "31:27  Thor bottom (native)": "Thor Bottom Screen (31:27)",
-    "4:3  DS / 3DS bottom / NES / SNES / N64 / PS1 / PS2 / GC / Genesis": "DS (4:3)",
-    "8:7  NES / SNES (pixel-perfect)": "SNES Pixel-Perfect (8:7)",
-    "10:9  Game Boy / GBC / Game Gear": "Game Boy (10:9)",
-    "20:19  Neo Geo Pocket": "Neo Geo Pocket (20:19)",
-    "12:7  Virtual Boy": "Virtual Boy (12:7)",
 }
+for (_w, _h), _names in _RATIO_CONSOLES.items():
+    _label = _ratio_label(_w, _h)
+    ASPECT_ALIASES[f"{_w}:{_h}"] = _label
+    for _n in _names:
+        ASPECT_ALIASES[f"{_n} ({_w}:{_h})"] = _label           # "DS (4:3)" style
+    ASPECT_ALIASES[f"Widescreen ({_w}:{_h})"] = _label
+ASPECT_ALIASES.update({
+    "Square (1:1)": _ratio_label(1, 1),
+    "SNES Pixel-Perfect (8:7)": _ratio_label(8, 7),
+    "NES Pixel-Perfect (8:7)": _ratio_label(8, 7),
+    # first-generation long labels
+    "16:9  Switch / PSP / Vita / modern": _ratio_label(16, 9),
+    "5:3  3DS top": _ratio_label(5, 3),
+    "3:2  GBA": _ratio_label(3, 2),
+    "31:27  Thor bottom (native)": _ratio_label(31, 27),
+    "4:3  DS / 3DS bottom / NES / SNES / N64 / PS1 / PS2 / GC / Genesis": _ratio_label(4, 3),
+    "8:7  NES / SNES (pixel-perfect)": _ratio_label(8, 7),
+    "10:9  Game Boy / GBC / Game Gear": _ratio_label(10, 9),
+    "20:19  Neo Geo Pocket": _ratio_label(20, 19),
+    "12:7  Virtual Boy": _ratio_label(12, 7),
+})
 
 
 def aspect_short(label):
-    """Display name for status messages"""
-    return label
+    """'4:3 (DS, NES, ...)' -> '4:3' for status messages"""
+    return label if label == FULL_SCREEN_LABEL else label.split(" (")[0]
 
 
 # Timing delays for process management
