@@ -40,7 +40,9 @@ from src.device_selector import show_device_selector
 from src.custom_profile_store import CustomProfileStore
 from src.control_panel import show_loading_screen, CTkUI
 from src.device_profile_editor import DeviceProfileEditorDialog
-from src.win32_dock import Win32Dock, monitor_work_area, monitor_rect, frame_insets, apply_docked_style
+from src.win32_dock import (
+    Win32Dock, monitor_work_area, monitor_rect, frame_insets, apply_docked_style, send_scrcpy_shortcut,
+)
 from src.viewport import ViewportManager, FULL_CROP
 from src.scrcpy_manager import valid_crop, ASPECT_PRESETS, ASPECT_ALIASES, FULL_SCREEN_LABEL
 from src import app_volume
@@ -746,6 +748,9 @@ class Launcher:
                         if top:
                             self.viewports.adopt("top", top)
                             self.dock.hwnd_top = top
+                            if self.thor_screens_off:
+                                # give scrcpy a moment to finish connecting
+                                threading.Timer(2.0, self._reapply_screen_off).start()
                         bottom = self.user32.FindWindowW(None, bottom_title)
                         if bottom:
                             self.viewports.adopt("bottom", bottom)
@@ -1419,13 +1424,16 @@ class Launcher:
     # ------------------------------------------------------------------
     # Dim the handheld's screens while streaming
     # ------------------------------------------------------------------
-    # Powering the panels off (scrcpy --turn-screen-off) doesn't work on the
-    # Thor: the mirror goes black and only the top panel switches off. Instead
-    # both panels are set to minimum brightness (~2 nits): the picture keeps
-    # streaming and the screens are practically dark. The user's brightness
-    # is saved first and restored when switched off, on exit, or - after a
-    # crash - the next time DualCPY connects.
-    BRIGHTNESS_KEYS = ("screen_brightness_mode", "screen_brightness", "dual_screen_brightness_level")
+    # Tested on the Thor (Android 13):
+    #  - scrcpy's runtime shortcut Alt+O turns the TOP panel off and mirroring
+    #    keeps working (the --turn-screen-off start flag blacked out the mirror)
+    #  - scrcpy can't power the bottom panel off on Android 13 (Alt+O sent to
+    #    the bottom stream also switches the top one), so the bottom panel is
+    #    set to minimum brightness via AYN's dual_screen_brightness_level.
+    # The bottom brightness is saved first and restored when switched off, on
+    # exit, or - after a crash - the next time DualCPY connects. The top panel
+    # is restored by scrcpy's on-device cleanup whenever the stream ends.
+    BRIGHTNESS_KEYS = ("dual_screen_brightness_level",)
 
     def _adb_shell(self, command, timeout=6):
         adb_bin = getattr(self.scrcpy, "adb_bin", None)
@@ -1450,11 +1458,9 @@ class Launcher:
             backup = {k: v for k, v in zip(self.BRIGHTNESS_KEYS, values) if v and v != "null"}
             self.config.set("thor_brightness_backup", backup)
             logger.info(f"Saved Thor brightness: {backup}")
-        cmds = ["settings put system screen_brightness_mode 0",
-                "settings put system screen_brightness 0"]
-        if "dual_screen_brightness_level" in backup:
-            cmds.append("settings put system dual_screen_brightness_level 0")
-        ok = self._adb_shell("; ".join(cmds)) is not None
+        if "dual_screen_brightness_level" not in backup:
+            return True  # not an AYN dual-screen device - top screen only
+        ok = self._adb_shell("settings put system dual_screen_brightness_level 0") is not None
         logger.info(f"Thor screens dimmed: {ok}")
         return ok
 
@@ -1462,7 +1468,8 @@ class Launcher:
         backup = self.config.get("thor_brightness_backup", None)
         if not backup:
             return True
-        cmds = [f"settings put system {k} {v}" for k, v in backup.items() if k in self.BRIGHTNESS_KEYS]
+        restorable = ("screen_brightness_mode", "screen_brightness", "dual_screen_brightness_level")
+        cmds = [f"settings put system {k} {v}" for k, v in backup.items() if k in restorable]
         ok = self._adb_shell("; ".join(cmds)) is not None
         if ok:
             cfg = self.config.load()
@@ -1479,14 +1486,21 @@ class Launcher:
         except Exception:
             pass
 
+        sent = send_scrcpy_shortcut(self.dock.hwnd_top, "o", shift=not off)
+
         def worker():
             ok = self._dim_thor() if off else self._restore_thor_brightness()
-            if ok:
-                self._notify("Thor screens " + ("dimmed" if off else "restored"), "success")
+            if ok and sent:
+                self._notify("Thor screens " + ("off" if off else "on"), "success")
             else:
-                self._notify("Couldn't change the Thor's brightness - is it connected?", "error")
+                self._notify("Couldn't reach the Thor - is it connected?", "error")
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _reapply_screen_off(self):
+        """A fresh top stream starts with the screen on - switch it off again"""
+        if self.thor_screens_off:
+            send_scrcpy_shortcut(self.dock.hwnd_top, "o", shift=False)
 
     def _apply_thor_screens_on_connect(self):
         """After connecting: undo a dim left over from a crash, then re-dim if wanted"""
@@ -1992,7 +2006,13 @@ class Launcher:
             except Exception:
                 pass
 
-        # Give the Thor its normal brightness back before disconnecting
+        # Give the Thor its screens back before disconnecting
+        try:
+            if self.thor_screens_off:
+                send_scrcpy_shortcut(self.dock.hwnd_top, "o", shift=True)
+                time.sleep(0.3)
+        except Exception:
+            pass
         try:
             if self.config.get("thor_brightness_backup", None):
                 self._restore_thor_brightness()

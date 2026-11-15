@@ -300,6 +300,40 @@ def set_client_rect(hwnd, x, y, w, h):
     )
 
 
+def send_scrcpy_shortcut(hwnd, key="o", shift=False):
+    """
+    Send a scrcpy keyboard shortcut (left Alt + key [+ Shift]) to a scrcpy
+    window without needing focus, e.g. Alt+O = turn the device screen off
+    (mirroring continues), Alt+Shift+O = turn it back on.
+    """
+    if not hwnd or not user32.IsWindow(hwnd):
+        return False
+    WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP = 0x0101, 0x0104, 0x0105
+    VK_LMENU, VK_LSHIFT = 0xA4, 0xA0
+    vk = ord(key.upper())
+    scan = {VK_LMENU: 0x38, VK_LSHIFT: 0x2A}
+    scan[vk] = user32.MapVirtualKeyW(vk, 0)
+
+    def lp(code, up, alt):
+        v = 1 | (scan[code] << 16)
+        if alt:
+            v |= 1 << 29
+        if up:
+            v |= (1 << 30) | (1 << 31)
+        return v
+
+    post = user32.PostMessageW
+    post(hwnd, WM_SYSKEYDOWN, VK_LMENU, lp(VK_LMENU, False, True))
+    if shift:
+        post(hwnd, WM_SYSKEYDOWN, VK_LSHIFT, lp(VK_LSHIFT, False, True))
+    post(hwnd, WM_SYSKEYDOWN, vk, lp(vk, False, True))
+    post(hwnd, WM_SYSKEYUP, vk, lp(vk, True, True))
+    if shift:
+        post(hwnd, WM_SYSKEYUP, VK_LSHIFT, lp(VK_LSHIFT, True, True))
+    post(hwnd, WM_KEYUP, VK_LMENU, lp(VK_LMENU, True, False))
+    return True
+
+
 # Window Style Transformers
 def apply_docked_style(hwnd):
     """

@@ -753,6 +753,10 @@ class ScrcpyManager:
             WIRELESS_MAX_SIZE_TOP, profile.extra_scrcpy_args_top,
         )
         top_args = top_args + self.audio_args() + ["--gamepad=uhid"]
+        # Keep scrcpy's on-device cleanup for the top stream: if DualCPY turned
+        # the Thor's screen off, the device turns it back on by itself however
+        # the stream ends (close, crash, Wi-Fi drop)
+        top_args = [a for a in top_args if a != "--no-cleanup"]
 
         self._start_window(
             use_serial,

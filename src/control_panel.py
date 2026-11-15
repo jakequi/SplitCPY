@@ -404,7 +404,7 @@ class CTkUI:
             .pack(fill="x", padx=16, pady=(4, 2))
         self._screens_off_var = tk.BooleanVar(value=self.l.thor_screens_off)
         ctk.CTkSwitch(
-            self._scroll, text="Dim Thor screens while streaming (Ctrl+Alt+O)",
+            self._scroll, text="Thor screens off while streaming (Ctrl+Alt+O)",
             variable=self._screens_off_var,
             command=lambda: self.l.set_thor_screens_off(bool(self._screens_off_var.get())),
             progress_color=ACCENT_COLOUR, text_color=TEXT_COLOUR, font=make_font(13),
