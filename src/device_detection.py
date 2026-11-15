@@ -219,3 +219,99 @@ def get_display_list(adb_bin, serial):
 
     logger.info(f"Displays found: {displays}")
     return displays
+
+# ----------------------------------------------------------------------
+# Wireless quick-connect helpers (DualCPY Split)
+# ----------------------------------------------------------------------
+def list_ready_devices(adb_bin):
+    """Serials of devices in the 'device' state (authorised and online)"""
+    try:
+        result = subprocess.run(
+            [adb_bin, "devices"], capture_output=True, text=True,
+            timeout=ADB_INFO_TIMEOUT, creationflags=CREATE_NO_WINDOW,
+        )
+    except Exception as e:
+        logger.debug(f"adb devices failed: {e}")
+        return []
+    serials = []
+    for line in (result.stdout or "").splitlines()[1:]:
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "device":
+            serials.append(parts[0])
+    return serials
+
+
+def adb_connect(adb_bin, target, timeout=6):
+    """`adb connect ip:port`; True if connected (or already connected)"""
+    try:
+        result = subprocess.run(
+            [adb_bin, "connect", target], capture_output=True, text=True,
+            timeout=timeout, creationflags=CREATE_NO_WINDOW,
+        )
+        out = (result.stdout or "").lower()
+        ok = "connected to" in out and "cannot" not in out and "failed" not in out
+        logger.info(f"adb connect {target}: {out.strip()}")
+        return ok
+    except Exception as e:
+        logger.info(f"adb connect {target} failed: {e}")
+        return False
+
+
+def mdns_connect_targets(adb_bin):
+    """
+    ip:port of paired devices advertising wireless debugging on the network.
+    Android picks a new port whenever Wireless debugging is re-enabled, so this
+    is how we find the current one without the user typing it in.
+    """
+    try:
+        result = subprocess.run(
+            [adb_bin, "mdns", "services"], capture_output=True, text=True,
+            timeout=ADB_INFO_TIMEOUT, creationflags=CREATE_NO_WINDOW,
+        )
+    except Exception as e:
+        logger.debug(f"adb mdns services failed: {e}")
+        return []
+    return re.findall(r"_adb-tls-connect\._tcp\.?\s+(\d+\.\d+\.\d+\.\d+:\d+)", result.stdout or "")
+
+
+def auto_connect_wireless(adb_bin, saved_ip=None, saved_port=None, timeout=6.0, progress=None):
+    """
+    Get a paired handheld connected over Wi-Fi without any dialog:
+      1. adb often auto-connects paired devices it discovers - just wait for it
+      2. connect to any device advertising wireless debugging (current port)
+      3. connect to the last address used
+    Returns (serial, "ip:port" or None) or (None, None).
+    """
+    import time as _time
+    if not adb_bin:
+        return None, None
+    deadline = _time.time() + timeout
+    tried = set()
+    saved = f"{saved_ip}:{saved_port}" if saved_ip and saved_port else None
+    while _time.time() < deadline:
+        ready = list_ready_devices(adb_bin)
+        if ready:
+            logger.info(f"Auto-connect: device ready: {ready[0]}")
+            return ready[0], None
+
+        targets = mdns_connect_targets(adb_bin)
+        # Prefer the device we used last time
+        if saved_ip:
+            targets.sort(key=lambda t: 0 if t.startswith(saved_ip + ":") else 1)
+        if saved and saved not in targets:
+            targets.append(saved)
+        for target in targets:
+            if target in tried:
+                continue
+            tried.add(target)
+            if progress:
+                progress(f"Connecting to {target}...")
+            if adb_connect(adb_bin, target):
+                for _ in range(10):
+                    ready = list_ready_devices(adb_bin)
+                    if ready:
+                        return (target if target in ready else ready[0]), target
+                    _time.sleep(0.2)
+        _time.sleep(0.4)
+    logger.info("Auto-connect: no wireless device found")
+    return None, None

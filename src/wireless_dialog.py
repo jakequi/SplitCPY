@@ -442,16 +442,15 @@ class WirelessConnectionDialog:
 
         try:
             success = self.scrcpy_manager.connect_wireless(ip, port_num)
+            if not success:
+                # Android changes the port whenever Wireless debugging is
+                # re-enabled - look up the current one on the network
+                success = self._connect_via_discovery(ip)
             if success:
-                self._msgbox_info(
-                    "Connection Successful",
-                    f"Successfully connected to {ip}:{port}\n\n"
-                    "You can now close the Wireless Connection Window and start using DualCPY wirelessly!\n"
-                    "You may have to restart DualCPY for changes to take effect.\n"
-                    "If the DualCPY main window doesn't open check it's not open in the background!",
-                )
+                # Straight into the streams - no "close this window" step
                 self.result = "connected"
-                self._update_status()
+                self._finish_connected()
+                return
             else:
                 self._msgbox_error(
                     "Connection Failed",
@@ -464,7 +463,10 @@ class WirelessConnectionDialog:
                     "- You've successfully paired the device first (if first time)",
                 )
         finally:
-            self.connect_btn.configure(state="normal", text="Connect Now")
+            try:  # the dialog may already be closed after a successful connect
+                self.connect_btn.configure(state="normal", text="Connect Now")
+            except Exception:
+                pass
 
     def _on_pair(self):
         """Validate fields and attempt ADB wireless pairing using a 6-digit code."""
@@ -511,16 +513,23 @@ class WirelessConnectionDialog:
         try:
             success = self.scrcpy_manager.pair_wireless(ip, port_num, pairing_code)
             if success:
-                self._msgbox_info(
-                    "Pairing Successful",
-                    f"Successfully paired with {address}!\n\n"
-                    "Next Step:\n"
-                    "Use the 'Quick Connect' section above to connect.\n\n"
-                    "Use the IP address and port shown in the main\n"
-                    "'Wireless Debugging' settings (NOT the pairing screen).",
-                )
                 self._set_entry(self.ip_entry, ip)
                 self._set_entry(self.pair_code_entry, "")
+                # Connect right away: the paired device announces its connect
+                # port on the network, so there's no second step to do by hand
+                self.pair_btn.configure(text="Connecting...")
+                self.status_label.configure(text="Paired - connecting...", text_color=SUCCESS_COLOUR)
+                self.dialog.update()
+                if self._connect_via_discovery(ip, timeout=8.0):
+                    self.result = "connected"
+                    self._finish_connected()
+                    return
+                self._msgbox_info(
+                    "Paired",
+                    f"Paired with {address}.\n\n"
+                    "Now enter the IP address and port from the main 'Wireless debugging' "
+                    "screen (not the pairing screen) under Quick Connect.",
+                )
             else:
                 self._msgbox_error(
                     "Pairing Failed",
@@ -534,7 +543,31 @@ class WirelessConnectionDialog:
                     "Tip: Try generating a new pairing code on your device.",
                 )
         finally:
-            self.pair_btn.configure(state="normal", text="Pair Device")
+            try:  # the dialog may already be closed after pairing + connecting
+                self.pair_btn.configure(state="normal", text="Pair Device")
+            except Exception:
+                pass
+
+    def _connect_via_discovery(self, ip, timeout=4.0):
+        """Find the device's current wireless-debugging port and connect to it"""
+        from src.device_detection import auto_connect_wireless
+        adb_bin = self.scrcpy_manager.adb_bin
+        serial, target = auto_connect_wireless(adb_bin, saved_ip=ip, timeout=timeout)
+        if not serial:
+            return False
+        self.scrcpy_manager.serial = serial
+        self.scrcpy_manager.connection_mode = "wireless"
+        if target:
+            t_ip, t_port = target.rsplit(":", 1)
+            self._set_entry(self.ip_entry, t_ip)
+            self._set_entry(self.port_entry, t_port)
+        logger.info(f"Connected via discovery: {serial}")
+        return True
+
+    def _finish_connected(self):
+        """Save the address and close straight away so DualCPY carries on"""
+        logger.info("Wireless connection established - closing dialog")
+        self._on_close()
 
     def _on_disconnect(self):
         """Prompt the user to confirm, then disconnect the active wireless device."""

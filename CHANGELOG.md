@@ -14,6 +14,8 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 - **Device profiles toggle** (Settings): off = always use the built-in AYN Thor profile, no device selector
 - **Ctrl+Alt+M** shows/hides the control panel, even over fullscreen
 - **120 FPS (experimental)** - bitrate scales with frame rate so 120 FPS frames stay sharp
+- **Test Connection & Auto-Set**: measures the handheld-to-PC Wi-Fi (response time, jitter, throughput) and picks the lowest Latency setting that keeps audio clean
+- **Instant wireless connect**: on start-up a paired handheld is reconnected automatically (finds its current wireless-debugging port on the network, or uses the last address) - no dialog. Quick Connect and Pair now go straight into the streams instead of waiting for you to close the window; if the port changed, the new one is found automatically
 - **Volume slider** (sets the stream's volume in the Windows mixer)
 - **Audio output** setting: PC, Device (keep sound on the handheld) or Both (Android 13+)
 - **Latency** setting: Low (default; full quality, smallest buffers), Balanced, Stable

@@ -439,8 +439,21 @@ class CTkUI:
                    "Frame rate - 120 FPS (experimental) needs a 120 Hz+ monitor and a game running at "
                    "120; it uses ~1.5x the bandwidth. OBS still records at its own rate (usually 60).\n"
                    "Changing these restarts the streams (a second or two).")
-        self._button(self._scroll, "Restart Streams", self._on_restart) \
-            .pack(fill="x", padx=16, pady=(4, 0))
+        test_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        test_row.pack(fill="x", padx=16, pady=(4, 0))
+        test_row.columnconfigure(0, weight=1)
+        test_row.columnconfigure(1, weight=1)
+        self._button(test_row, "Test Connection & Auto-Set", self._on_link_test, accent=True) \
+            .grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self._button(test_row, "Restart Streams", self._on_restart) \
+            .grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self._link_result = ctk.CTkLabel(self._scroll, text="", font=make_font(12),
+                                         text_color=TEXT_COLOUR, anchor="w", justify="left",
+                                         wraplength=400)
+        self._link_result.pack(anchor="w", padx=16, pady=(4, 0))
+        self._hint("Tests the Wi-Fi between the handheld and this PC (your internet speed doesn't "
+                   "matter - the stream never leaves your home network) and picks the lowest Latency "
+                   "setting that keeps audio clean. Takes ~10 seconds.")
 
         # -------------------------------------------------------- Tools
         self._separator()
@@ -825,6 +838,26 @@ class CTkUI:
         self.show_status("Applying - restarting streams...", "info")
         self.l.set_stream_option(key, value)
 
+    def _on_link_test(self):
+        self._link_result.configure(text="Testing... (about 10 seconds)", text_color=TEXT_COLOUR)
+        self.l.run_link_test()
+
+    def on_link_test_result(self, result, key, reason):
+        """Show the measurements and apply the recommended Latency setting"""
+        from src.scrcpy_manager import AUDIO_LATENCY_LABELS
+        label = AUDIO_LATENCY_LABELS.get(key, key)
+        if result:
+            text = (f"Response {result['rtt_ms']:.0f} ms, jitter {result['jitter_ms']:.0f} ms, "
+                    f"speed {result['mbps']:.0f} Mbps\nBest: {label} - {reason}")
+        else:
+            text = f"USB connection\nBest: {label} - {reason}"
+        self._link_result.configure(text=text, text_color=SUCCESS_COLOUR)
+        if key != self.l.audio_latency:
+            self._latency_var.set(label)
+            self._on_stream_option("audio_latency", key)
+        else:
+            self.show_status(f"Already on the best setting ({label})", "success")
+
     def _on_restart(self):
         self.show_status("Restarting streams...", "info")
         self.l.restart_streams()
@@ -842,7 +875,9 @@ class CTkUI:
         try:
             result = self.l.show_connection_dialog()
             if result == "connected":
-                self.show_status("Wireless connected", "success")
+                self.show_status("Wireless connected - starting streams...", "success")
+                self.l.restart_streams()
+                self._refresh_profile_label()
             elif result == "disconnected":
                 self.show_status("Device disconnected", "info")
         finally:

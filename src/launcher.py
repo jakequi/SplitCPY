@@ -45,7 +45,9 @@ from src.viewport import ViewportManager, FULL_CROP
 from src.scrcpy_manager import valid_crop, ASPECT_PRESETS, ASPECT_ALIASES, FULL_SCREEN_LABEL
 from src import app_volume
 from src import process_guard
-from src.device_detection import detect_device, resolve_adb, get_device_info, get_display_list
+from src.device_detection import (
+    detect_device, resolve_adb, get_device_info, get_display_list, auto_connect_wireless,
+)
 from src.ui_constants import resource_path
 
 logger = logging.getLogger(__name__)
@@ -1161,6 +1163,41 @@ class Launcher:
         if restart:
             self.restart_streams()
 
+    def run_link_test(self):
+        """
+        Measure the handheld <-> PC link in the background and hand the
+        recommendation to the control panel (which applies it).
+        """
+        if getattr(self, "_link_test_running", False) or not self.scrcpy:
+            return
+        adb_bin, serial = self.scrcpy.adb_bin, self.scrcpy.serial
+        if not adb_bin or not serial:
+            self._notify("No device connected", "error")
+            return
+        self._link_test_running = True
+
+        def worker():
+            from src import link_test
+            ui = getattr(self, "ui", None)
+            try:
+                wireless = self.scrcpy.is_wireless
+                if wireless:
+                    result = link_test.measure(
+                        adb_bin, serial,
+                        progress=lambda m: self._notify(m, "info"))
+                else:
+                    result = None
+                key, reason = link_test.recommend(result or {}, wireless, self.max_fps)
+                if ui:
+                    self.ui_calls.put(lambda: ui.on_link_test_result(result, key, reason))
+            except Exception as e:
+                logger.error(f"Link test failed: {e}", exc_info=True)
+                self._notify(f"Connection test failed: {e}", "error")
+            finally:
+                self._link_test_running = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def set_default_setup(self, name):
         self.default_setup = name
         self.config.set("default_profile", name)
@@ -1488,17 +1525,30 @@ class Launcher:
         adb_bin = resolve_adb("adb")
         serial = detect_device(adb_bin)
 
-        # If no device is found on boot, use wireless
+        # No USB device: quietly reconnect a paired handheld over Wi-Fi first
+        # (finds its current port via the network, or uses the last address)
         if not serial:
-            logger.info("No USB device found on boot, offering wireless connection")
-
-            response = messagebox.askyesno(
-                "No Device Found",
-                "No USB device detected.\n\n"
-                "Would you like to connect wirelessly?\n\n"
-                "Click Yes to open the wireless connection dialog,\n"
-                "or No to exit."
+            logger.info("No USB device - trying wireless auto-connect")
+            serial, target = auto_connect_wireless(
+                adb_bin,
+                saved_ip=self.config.get("wireless_connect_ip", None),
+                saved_port=self.config.get("wireless_connect_port", None),
             )
+            if serial and target:
+                ip, port = target.rsplit(":", 1)
+                try:
+                    cfg = self.config.load()
+                    cfg["wireless_connect_ip"], cfg["wireless_connect_port"] = ip, port
+                    self.config.save(cfg)
+                except Exception as e:
+                    logger.warning(f"Could not save wireless address: {e}")
+            if serial:
+                logger.info(f"Wireless auto-connect succeeded: {serial}")
+
+        # Still nothing: ask, then show the wireless dialog
+        if not serial:
+            logger.info("No device found on boot - opening the wireless connection dialog")
+            response = True  # go straight to the dialog; closing it exits
 
             if response:
                 # The dialog requires ScrcpyManager to function.
