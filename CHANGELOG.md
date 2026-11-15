@@ -9,7 +9,11 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 - **Fullscreen**: the game area is centred on the monitor at the largest size, over a separate black backdrop window that OBS's Window Capture never sees
 - **Gap** slider between stacked screens
 - **Global hotkeys** (work in-game): Ctrl+Alt+1 Both, Ctrl+Alt+2 Top, Ctrl+Alt+3 Bottom, Ctrl+Alt+S cycle, Ctrl+Alt+F fullscreen
-- **Aspect presets for retro systems** (DS, 3DS top, GBA, Game Boy, NES/SNES, Virtual Boy, Neo Geo Pocket, Thor bottom 31:27, ...) - cropping is done on the PC side, so it's instant and never restarts the stream
+- **Aspect presets per console** - "Console (ratio)", alphabetical (3DS, DS, GBA, Game Boy, NES/SNES incl. pixel-perfect 8:7, PlayStation, Saturn, Switch, Thor Bottom Screen 31:27, Virtual Boy, WonderSwan, ...). Cropping is done on the PC side, so it's instant and never restarts the stream
+- **Profiles**: save the whole setup (view, aspect, gap, volume, audio, latency, FPS, split/combined); star one as default to load on start-up
+- **Device profiles toggle** (Settings): off = always use the built-in AYN Thor profile, no device selector
+- **Ctrl+Alt+M** shows/hides the control panel, even over fullscreen
+- **120 FPS (experimental)** - bitrate scales with frame rate so 120 FPS frames stay sharp
 - **Volume slider** (sets the stream's volume in the Windows mixer)
 - **Audio output** setting: PC, Device (keep sound on the handheld) or Both (Android 13+)
 - **Latency** setting: Low (default; full quality, smallest buffers), Balanced, Stable
@@ -19,7 +23,8 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 - Split-mode screenshots (both windows stacked into one image)
 
 ### Changed
-- Reorganised control panel (View / Aspect / Audio & Stream / Tools); manual position sliders, size slider and layout presets replaced by the self-fitting stage
+- Reorganised control panel (View / Aspect / Audio & Stream / Tools / Profiles / Settings); manual position sliders, size slider and layout presets replaced by the self-fitting stage and Profiles
+- Mouse wheel no longer changes slider values (it moved the volume while scrolling the panel)
 - Window size and position are remembered between launches
 - Changing FPS / audio restarts just the streams, not the whole app
 - Wi-Fi bitrate is tied to the Latency setting (Balanced/Stable use less bandwidth if audio warps)

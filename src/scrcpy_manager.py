@@ -113,30 +113,71 @@ def valid_crop(crop):
         return False
 
 
-# Aspect-ratio crop presets: label -> width/height (None = full screen).
+# Aspect-ratio crop presets: "Console (ratio)" -> width/height.
 # The crop is centred and applied on the PC side (instant, no restart).
-ASPECT_PRESETS = {
-    "Full screen": None,
-    "16:9  Switch / PSP / Vita / modern": 16 / 9,
-    "16:10": 16 / 10,
-    "5:3  3DS top": 5 / 3,
-    "3:2  GBA": 3 / 2,
-    "31:27  Thor bottom (native)": 31 / 27,
-    "4:3  DS / 3DS bottom / NES / SNES / N64 / PS1 / PS2 / GC / Genesis": 4 / 3,
-    "8:7  NES / SNES (pixel-perfect)": 8 / 7,
-    "10:9  Game Boy / GBC / Game Gear": 10 / 9,
-    "20:19  Neo Geo Pocket": 20 / 19,
-    "12:7  Virtual Boy": 12 / 7,
-    "1:1": 1.0,
+FULL_SCREEN_LABEL = "Full Screen (no crop)"
+_CONSOLE_ASPECTS = {
+    "3DS Bottom (4:3)": 4 / 3,
+    "3DS Top (5:3)": 5 / 3,
+    "Arcade (4:3)": 4 / 3,
+    "Atari Lynx (80:51)": 80 / 51,
+    "Dreamcast (4:3)": 4 / 3,
+    "DS (4:3)": 4 / 3,
+    "Game Boy (10:9)": 10 / 9,
+    "Game Boy Advance (3:2)": 3 / 2,
+    "Game Boy Color (10:9)": 10 / 9,
+    "Game Gear (10:9)": 10 / 9,
+    "GameCube (4:3)": 4 / 3,
+    "Genesis / Mega Drive (4:3)": 4 / 3,
+    "Neo Geo Pocket (20:19)": 20 / 19,
+    "NES (4:3)": 4 / 3,
+    "NES Pixel-Perfect (8:7)": 8 / 7,
+    "Nintendo 64 (4:3)": 4 / 3,
+    "PC Engine / TurboGrafx-16 (4:3)": 4 / 3,
+    "PlayStation (4:3)": 4 / 3,
+    "PlayStation 2 (4:3)": 4 / 3,
+    "PS Vita (16:9)": 16 / 9,
+    "PSP (16:9)": 16 / 9,
+    "Saturn (4:3)": 4 / 3,
+    "SNES (4:3)": 4 / 3,
+    "SNES Pixel-Perfect (8:7)": 8 / 7,
+    "Square (1:1)": 1.0,
+    "Switch (16:9)": 16 / 9,
+    "Thor Bottom Screen (31:27)": 31 / 27,
+    "Virtual Boy (12:7)": 12 / 7,
+    "Widescreen (16:10)": 16 / 10,
+    "Widescreen (16:9)": 16 / 9,
+    "WonderSwan (14:9)": 14 / 9,
 }
-# Old short names saved in configs from earlier versions
-ASPECT_ALIASES = {"Full": "Full screen", "4:3": "4:3  DS / 3DS bottom / NES / SNES / N64 / PS1 / PS2 / GC / Genesis",
-                  "3:2": "3:2  GBA", "5:3": "5:3  3DS top", "16:10": "16:10", "Detected": "Full screen"}
+ASPECT_PRESETS = {FULL_SCREEN_LABEL: None}
+ASPECT_PRESETS.update(sorted(_CONSOLE_ASPECTS.items(), key=lambda kv: kv[0].lower()))
+
+# Names saved in configs/profiles by earlier versions
+ASPECT_ALIASES = {
+    "Full": FULL_SCREEN_LABEL,
+    "Full screen": FULL_SCREEN_LABEL,
+    "Detected": FULL_SCREEN_LABEL,
+    "4:3": "DS (4:3)",
+    "3:2": "Game Boy Advance (3:2)",
+    "5:3": "3DS Top (5:3)",
+    "16:10": "Widescreen (16:10)",
+    "1:1": "Square (1:1)",
+    "16:9  Switch / PSP / Vita / modern": "Widescreen (16:9)",
+    "5:3  3DS top": "3DS Top (5:3)",
+    "3:2  GBA": "Game Boy Advance (3:2)",
+    "31:27  Thor bottom (native)": "Thor Bottom Screen (31:27)",
+    "4:3  DS / 3DS bottom / NES / SNES / N64 / PS1 / PS2 / GC / Genesis": "DS (4:3)",
+    "8:7  NES / SNES (pixel-perfect)": "SNES Pixel-Perfect (8:7)",
+    "10:9  Game Boy / GBC / Game Gear": "Game Boy (10:9)",
+    "20:19  Neo Geo Pocket": "Neo Geo Pocket (20:19)",
+    "12:7  Virtual Boy": "Virtual Boy (12:7)",
+}
 
 
 def aspect_short(label):
-    """'4:3  DS / ...' -> '4:3' (for compact display)"""
-    return label.split("  ")[0]
+    """Display name for status messages"""
+    return label
+
 
 # Timing delays for process management
 DISPLAY_INIT_DELAY = 1.2  # Wait for first display to initialize
@@ -262,6 +303,7 @@ class ScrcpyManager:
         p = self.profile
         w, h = ((p.top_screen_width, p.top_screen_height) if key == "top"
                 else (p.bottom_screen_width, p.bottom_screen_height))
+        aspect_name = ASPECT_ALIASES.get(aspect_name, aspect_name)
         cw, ch = self._crop_size(w, h, aspect_name)
         fx, fy = (1 - cw / w) / 2, (1 - ch / h) / 2
         return (fx, fy, 1 - fx, 1 - fy)
@@ -579,15 +621,19 @@ class ScrcpyManager:
         factor = max_size / max(cw, ch)
         stream_w, stream_h = int(cw * factor), int(ch * factor)
 
+        # More frames per second need more bits to keep each frame as sharp
+        # (sub-linear: consecutive frames at 120 FPS are very similar)
+        fps_factor = max(1.0, (self.max_fps / 60.0) ** 0.6)
+
         if custom_args:
             # Audio is managed by the control panel; ignore audio flags here
             args = [a for a in custom_args if not self._is_audio_arg(a)]
         elif self.is_wireless:
-            args = self.default_args(stream_w, stream_h, BITRATE_MIN_WIRELESS,
-                                     wifi_rate, enable_audio=False)
+            args = self.default_args(stream_w, stream_h, int(BITRATE_MIN_WIRELESS * fps_factor),
+                                     wifi_rate * fps_factor, enable_audio=False)
         else:
-            args = self.default_args(stream_w, stream_h, BITRATE_MIN_USB,
-                                     BITRATE_MBPS_PER_MP_USB, enable_audio=False)
+            args = self.default_args(stream_w, stream_h, int(BITRATE_MIN_USB * fps_factor),
+                                     BITRATE_MBPS_PER_MP_USB * fps_factor, enable_audio=False)
 
         return max_size, list(args)
 

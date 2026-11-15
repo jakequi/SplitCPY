@@ -42,7 +42,7 @@ from src.control_panel import show_loading_screen, CTkUI
 from src.device_profile_editor import DeviceProfileEditorDialog
 from src.win32_dock import Win32Dock, monitor_work_area, monitor_rect, frame_insets, apply_docked_style
 from src.viewport import ViewportManager, FULL_CROP
-from src.scrcpy_manager import valid_crop, ASPECT_PRESETS, ASPECT_ALIASES
+from src.scrcpy_manager import valid_crop, ASPECT_PRESETS, ASPECT_ALIASES, FULL_SCREEN_LABEL
 from src import app_volume
 from src import process_guard
 from src.device_detection import detect_device, resolve_adb, get_device_info, get_display_list
@@ -103,6 +103,7 @@ HOTKEYS = {
     3: (ord("3"), "bottom"),
     4: (ord("S"), "cycle"),
     5: (ord("F"), "fullscreen"),
+    6: (ord("M"), "menu"),
 }
 WS_POPUP = 0x80000000
 WS_MAXIMIZEBOX = 0x00010000
@@ -143,6 +144,12 @@ class Launcher:
         self.store = PresetStore("config/layout.json")
         self.config = ConfigManager("config/config.json")
         self.custom_profiles = CustomProfileStore("config/custom_profiles.json")
+        # Saved setups ("profiles"): view, aspect, gap, audio, latency, FPS...
+        self.setups = PresetStore("config/profiles.json")
+        self.default_setup = self.config.get("default_profile", None)
+        # Device profiles (per-handheld screen definitions) can be switched off:
+        # then the built-in AYN Thor profile is always used, no selector
+        self.device_profiles_enabled = bool(self.config.get("device_profiles_enabled", True))
 
         # Load scale from config if saved, otherwise let ScrcpyManager fall back to profile
         saved_scale = self.config.get("global_scale", None)
@@ -159,8 +166,8 @@ class Launcher:
         self.audio_mode = self.config.get("audio_mode", "pc")
         self.audio_latency = self.config.get("audio_latency", "low")
         # Visible region of each screen (PC-side crop, no restart needed)
-        self.top_aspect = self._normalise_aspect(self.config.get("top_aspect", "Full screen"))
-        self.bottom_aspect = self._normalise_aspect(self.config.get("bottom_aspect", "Full screen"))
+        self.top_aspect = self._normalise_aspect(self.config.get("top_aspect", FULL_SCREEN_LABEL))
+        self.bottom_aspect = self._normalise_aspect(self.config.get("bottom_aspect", FULL_SCREEN_LABEL))
         self.crops = {}
         for key in ("top", "bottom"):
             crop = self.config.get(f"{key}_crop", None)
@@ -169,7 +176,7 @@ class Launcher:
             else:
                 # Older config: aspect name without a crop region -> start full
                 self.crops[key] = FULL_CROP
-                setattr(self, f"{key}_aspect", "Full screen")
+                setattr(self, f"{key}_aspect", FULL_SCREEN_LABEL)
 
         # Stream restart / auto-reconnect state
         self._restarting = False
@@ -297,7 +304,7 @@ class Launcher:
     @staticmethod
     def _normalise_aspect(name):
         name = ASPECT_ALIASES.get(name, name)
-        return name if name in ASPECT_PRESETS else "Full screen"
+        return name if name in ASPECT_PRESETS else FULL_SCREEN_LABEL
 
     def _make_manager(self, profile, scale):
         """Create a ScrcpyManager with all current stream options applied"""
@@ -843,7 +850,11 @@ class Launcher:
 
     def _on_hotkey(self, hk_id):
         action = HOTKEYS.get(hk_id, (None, None))[1]
-        if action == "fullscreen":
+        if action == "menu":
+            ui = getattr(self, "ui", None)
+            if ui:
+                self.ui_calls.put(ui.toggle_panel)
+        elif action == "fullscreen":
             self.toggle_fullscreen()
         elif action:
             if not self.docked:
@@ -1087,6 +1098,76 @@ class Launcher:
         except (TypeError, ValueError, IndexError):
             pass
         return DEFAULT_CONTAINER_X, DEFAULT_CONTAINER_Y
+
+    # ------------------------------------------------------------------
+    # Profiles (saved setups)
+    # ------------------------------------------------------------------
+    def capture_setup(self):
+        """Everything a profile restores"""
+        return {
+            "view_mode": self.view_mode,
+            "screen_gap": self.screen_gap,
+            "top_aspect": self.top_aspect,
+            "bottom_aspect": self.bottom_aspect,
+            "top_crop": list(self.crops["top"]),
+            "bottom_crop": list(self.crops["bottom"]),
+            "volume": self.volume,
+            "audio_mode": self.audio_mode,
+            "audio_latency": self.audio_latency,
+            "max_fps": self.max_fps,
+            "stage_height": self.stage_height,
+            "split": not self.docked,
+        }
+
+    def apply_setup(self, data):
+        """Apply a saved profile. Only restarts the streams if audio/latency/FPS differ."""
+        if not data or not self.scrcpy:
+            return
+        restart = False
+        for key in ("audio_mode", "audio_latency"):
+            if key in data and data[key] != getattr(self, key):
+                setattr(self, key, data[key])
+                self.config.set(key, data[key])
+                restart = True
+        if "max_fps" in data and int(data["max_fps"]) != self.max_fps:
+            self.set_max_fps(int(data["max_fps"]))
+            restart = True
+
+        for key in ("top", "bottom"):
+            name = self._normalise_aspect(data.get(f"{key}_aspect", getattr(self, f"{key}_aspect")))
+            crop = data.get(f"{key}_crop")
+            if not (crop and valid_crop(crop)):
+                crop = self.scrcpy.preset_crop(key, name)
+            if tuple(crop) != tuple(self.crops[key]) or name != getattr(self, f"{key}_aspect"):
+                self.set_crop(key, crop, name)
+
+        if data.get("stage_height"):
+            self.stage_height = int(data["stage_height"])
+        if "screen_gap" in data:
+            self.screen_gap = max(0, min(MAX_SCREEN_GAP, int(data["screen_gap"])))
+        if data.get("view_mode") in VIEW_MODES:
+            self.view_mode = data["view_mode"]
+        if "volume" in data:
+            self.set_volume(int(data["volume"]))
+            self.save_volume()
+
+        want_split = bool(data.get("split", False))
+        if want_split != (not self.docked):
+            self.toggle_dock()
+        else:
+            self.fit_container_to_content()
+
+        self.save_layout()
+        if restart:
+            self.restart_streams()
+
+    def set_default_setup(self, name):
+        self.default_setup = name
+        self.config.set("default_profile", name)
+
+    def set_device_profiles_enabled(self, enabled):
+        self.device_profiles_enabled = bool(enabled)
+        self.config.set("device_profiles_enabled", self.device_profiles_enabled)
 
     # ------------------------------------------------------------------
     # Volume
@@ -1475,6 +1556,10 @@ class Launcher:
                     f"falling back to auto-detection"
                 )
 
+        if not self.device_profiles_enabled:
+            chosen_profile = BUILTIN_PROFILES.get("ayn_thor") or list(BUILTIN_PROFILES.values())[0]
+            logger.info("Device profiles are off - using the built-in AYN Thor profile")
+
         if chosen_profile is not None:
             # Apply live display specs (same logic as device_selector)
             display_list = get_display_list(adb_bin, serial)
@@ -1601,6 +1686,9 @@ class Launcher:
         # Create control panel
         self.ui = CTkUI(self)
         self._tk_root = self.ui.window
+
+        # Apply the default profile once the stage window exists
+        self.ui.window.after(1200, self.ui.load_default_profile)
 
         self.ui.run()
 

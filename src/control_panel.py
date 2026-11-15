@@ -72,6 +72,11 @@ SW_SHOW = 5
 CF_BITMAP = 2
 SRCCOPY = 0x00CC0020
 
+def fps_label(fps):
+    """Frame-rate dropdown label (120 is marked experimental)"""
+    return f"{fps} FPS (experimental)" if fps >= 120 else f"{fps} FPS"
+
+
 # Loading screen
 def show_loading_screen():
     """
@@ -393,7 +398,7 @@ class CTkUI:
                    "the screens, Top / Bottom show one screen. Fullscreen centres it on a black "
                    "background that OBS doesn't capture.\n"
                    "Hotkeys (work in-game): Ctrl+Alt+1 Both, Ctrl+Alt+2 Top, Ctrl+Alt+3 Bottom, "
-                   "Ctrl+Alt+S cycle, Ctrl+Alt+F fullscreen.\n"
+                   "Ctrl+Alt+S cycle, Ctrl+Alt+F fullscreen, Ctrl+Alt+M show/hide this menu.\n"
                    "OBS: Window Capture the \"DualCPY | ...\" window, then right-click it > Transform > "
                    "Edit Transform > Bounding Box Type: \"Scale to inner bounds\", Alignment: Center. "
                    "Switching views is then seamless.")
@@ -426,11 +431,13 @@ class CTkUI:
             AUDIO_LATENCY_LABELS.get(self.l.audio_latency, "Low"),
             lambda v: self._on_stream_option("audio_latency", self._latency_label_to_key[v]))
         self._fps_var = self._dropdown(
-            self._scroll, "Frame rate", [f"{v} FPS" for v in ALLOWED_FPS_VALUES],
-            f"{self.l.max_fps} FPS", self._on_fps_change)
+            self._scroll, "Frame rate", [fps_label(v) for v in ALLOWED_FPS_VALUES],
+            fps_label(self.l.max_fps), self._on_fps_change)
         self._hint("Audio output - PC, Device (sound stays on the handheld) or Both (Android 13+).\n"
                    "Latency - Low: smallest delay, full quality (USB / strong Wi-Fi). If sound warps "
                    "or crackles, try Balanced, then Stable.\n"
+                   "Frame rate - 120 FPS (experimental) needs a 120 Hz+ monitor and a game running at "
+                   "120; it uses ~1.5x the bandwidth. OBS still records at its own rate (usually 60).\n"
                    "Changing these restarts the streams (a second or two).")
         self._button(self._scroll, "Restart Streams", self._on_restart) \
             .pack(fill="x", padx=16, pady=(4, 0))
@@ -448,8 +455,46 @@ class CTkUI:
             .grid(row=0, column=1, sticky="ew", padx=(4, 0), pady=4)
         self._button(grid, "Wireless", self._on_wireless) \
             .grid(row=1, column=0, sticky="ew", padx=(0, 4), pady=4)
-        self._button(grid, "Device Profiles", self._on_edit_profiles) \
-            .grid(row=1, column=1, sticky="ew", padx=(4, 0), pady=4)
+        self._device_profiles_btn = self._button(grid, "Device Profiles", self._on_edit_profiles)
+        self._device_profiles_btn.grid(row=1, column=1, sticky="ew", padx=(4, 0), pady=4)
+
+        # -------------------------------------------------------- Profiles
+        self._separator()
+        self._section("Profiles")
+        self._hint("Save your whole setup (view, aspect, gap, volume, audio, latency, FPS, "
+                   "split/combined). The default profile (\u2605) loads automatically on start-up.")
+        save_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        save_row.pack(fill="x", padx=16, pady=4)
+        save_row.columnconfigure(0, weight=1)
+        self._profile_name_var = tk.StringVar(value="")
+        ctk.CTkEntry(
+            save_row, textvariable=self._profile_name_var,
+            placeholder_text="Profile name, e.g. DS streaming",
+            fg_color=PANEL_COLOUR, border_color=BORDER_COLOUR,
+            text_color=TEXT_COLOUR, font=make_font(13),
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        ctk.CTkButton(
+            save_row, text="Save", width=80, command=self._on_save_profile,
+            fg_color=ACCENT_COLOUR, hover_color=ACCENT2_COLOUR, font=make_font(13),
+        ).grid(row=0, column=1)
+        self._profile_list = ctk.CTkFrame(self._scroll, fg_color=PANEL_COLOUR, corner_radius=8)
+        self._profile_list.pack(fill="x", padx=16, pady=(6, 4))
+        self._profile_list.columnconfigure(0, weight=1)
+        self.refresh_profile_list()
+
+        # -------------------------------------------------------- Settings
+        self._separator()
+        self._section("Settings")
+        self._device_profiles_var = tk.BooleanVar(value=self.l.device_profiles_enabled)
+        ctk.CTkSwitch(
+            self._scroll, text="Device profiles (other handhelds / custom screen setups)",
+            variable=self._device_profiles_var, command=self._on_device_profiles_toggle,
+            progress_color=ACCENT_COLOUR, text_color=TEXT_COLOUR, font=make_font(13),
+        ).pack(anchor="w", padx=16, pady=(4, 2))
+        self._hint("Off: always uses the built-in AYN Thor profile and never asks which device "
+                   "you have. Takes effect next launch.")
+        ctk.CTkFrame(self._scroll, fg_color="transparent", height=16).pack()
+        self._apply_device_profiles_state()
 
         self._refresh_view_buttons()
 
@@ -552,6 +597,12 @@ class CTkUI:
             fg_color=BORDER_COLOUR,
         )
         slider.grid(row=0, column=1, sticky="ew", padx=10)
+        # Don't let the scroll wheel change values (it fired while scrolling
+        # the panel past the Volume slider); the wheel just scrolls the panel
+        try:
+            slider._canvas.unbind("<MouseWheel>")
+        except Exception:
+            pass
 
         # Entry box
         entry = ctk.CTkEntry(
@@ -624,6 +675,125 @@ class CTkUI:
         if self.l.set_crop(key, crop, name):
             from src.scrcpy_manager import aspect_short
             self.show_status(f"{key.title()} screen: {aspect_short(name)}", "success")
+
+    # ------------------------------------------------------------ profiles
+    def refresh_profile_list(self):
+        for w in self._profile_list.winfo_children():
+            w.destroy()
+        try:
+            profiles = self.l.setups.load_all()
+        except Exception as e:
+            logger.error(f"Could not load profiles: {e}")
+            profiles = {}
+        if not profiles:
+            ctk.CTkLabel(self._profile_list, text="No profiles yet - set things up, name it, Save.",
+                         text_color="#7d8494", font=make_font(12)).pack(pady=10)
+            return
+        for name in sorted(profiles, key=str.lower):
+            is_default = name == self.l.default_setup
+            row = ctk.CTkFrame(self._profile_list, fg_color="transparent")
+            row.pack(fill="x", padx=6, pady=3)
+            row.columnconfigure(1, weight=1)
+            ctk.CTkButton(
+                row, text="\u2605" if is_default else "\u2606", width=30,
+                fg_color="transparent", hover_color=BORDER_COLOUR,
+                text_color=WARNING_COLOUR if is_default else "#7d8494",
+                font=make_font(16),
+                command=lambda n=name: self._on_default_profile(n),
+            ).grid(row=0, column=0, padx=(0, 4))
+            ctk.CTkLabel(row, text=name, anchor="w", text_color=TEXT_COLOUR,
+                         font=make_font(13, "bold" if is_default else "normal")) \
+                .grid(row=0, column=1, sticky="w")
+            ctk.CTkButton(row, text="Load", width=56, fg_color=ACCENT_COLOUR,
+                          hover_color=ACCENT2_COLOUR, font=make_font(12),
+                          command=lambda n=name: self._on_load_profile(n)) \
+                .grid(row=0, column=2, padx=(4, 4))
+            ctk.CTkButton(row, text="Delete", width=60, fg_color="#8b2020",
+                          hover_color="#c0392b", font=make_font(12),
+                          command=lambda n=name: self._on_delete_profile(n)) \
+                .grid(row=0, column=3)
+
+    def _on_save_profile(self):
+        name = self._profile_name_var.get().strip()
+        if not name:
+            self.show_status("Type a name for the profile first", "error")
+            return
+        try:
+            self.l.setups.save_preset(name, self.l.capture_setup())
+        except ValueError as e:
+            self.show_status(str(e), "error")
+            return
+        except Exception as e:
+            logger.error(f"Profile save failed: {e}", exc_info=True)
+            self.show_status("Couldn't save the profile", "error")
+            return
+        self._profile_name_var.set("")
+        self.refresh_profile_list()
+        self.show_status(f"Saved profile: {name}", "success")
+
+    def _on_load_profile(self, name):
+        data = self.l.setups.get_preset(name)
+        if not data:
+            self.show_status(f"Profile '{name}' not found", "error")
+            return
+        self.l.apply_setup(data)
+        self._sync_sliders_from_launcher()
+        self.show_status(f"Loaded profile: {name}", "success")
+
+    def _on_default_profile(self, name):
+        if self.l.default_setup == name:
+            self.l.set_default_setup(None)
+            self.show_status("No default profile", "info")
+        else:
+            self.l.set_default_setup(name)
+            self.show_status(f"'{name}' loads on start-up", "success")
+        self.refresh_profile_list()
+
+    def _on_delete_profile(self, name):
+        if self.l.setups.delete_preset(name):
+            if self.l.default_setup == name:
+                self.l.set_default_setup(None)
+            self.refresh_profile_list()
+            self.show_status(f"Deleted profile: {name}", "info")
+
+    def load_default_profile(self):
+        """Called once at start-up"""
+        name = self.l.default_setup
+        if not name:
+            return
+        data = self.l.setups.get_preset(name)
+        if data:
+            self.l.apply_setup(data)
+            self._sync_sliders_from_launcher()
+            self.show_status(f"Loaded default profile: {name}", "success", duration=4.0)
+
+    def _on_device_profiles_toggle(self):
+        on = bool(self._device_profiles_var.get())
+        self.l.set_device_profiles_enabled(on)
+        self._apply_device_profiles_state()
+        self.show_status("Device profiles " + ("on" if on else "off") + " - applies next launch", "info",
+                         duration=4.0)
+
+    def _apply_device_profiles_state(self):
+        self._device_profiles_btn.configure(
+            state="normal" if self.l.device_profiles_enabled else "disabled")
+
+    def toggle_panel(self):
+        """Ctrl+Alt+M: bring the menu up over the stream (even fullscreen), or hide it"""
+        w = self.window
+        try:
+            visible = w.state() == "normal"
+            focused = w.focus_displayof() is not None
+        except Exception:
+            visible, focused = False, False
+        if visible and focused:
+            w.iconify()
+            return
+        w.deiconify()
+        w.lift()
+        w.attributes("-topmost", True)
+        w.after(300, lambda: w.attributes("-topmost", False))
+        w.focus_force()
 
     def _on_fullscreen(self):
         self.l.toggle_fullscreen()
@@ -841,11 +1011,20 @@ class CTkUI:
         if hasattr(self, "_current_profile_label") and self.l.scrcpy:
             self._refresh_profile_label()
         try:
+            from src.scrcpy_manager import AUDIO_MODE_LABELS, AUDIO_LATENCY_LABELS
             self._top_aspect_var.set(self.l.top_aspect)
             self._bottom_aspect_var.set(self.l.bottom_aspect)
-            self._fps_var.set(f"{self.l.max_fps} FPS")
-        except Exception:
-            pass
+            self._fps_var.set(fps_label(self.l.max_fps))
+            self._audio_var.set(AUDIO_MODE_LABELS.get(self.l.audio_mode, "PC"))
+            self._latency_var.set(AUDIO_LATENCY_LABELS.get(self.l.audio_latency, "Low"))
+            for key, val in (("volume", self.l.volume), ("screen_gap", self.l.screen_gap)):
+                ref = self._slider_refs.get(key)
+                if ref:
+                    ref["real"].set(int(val))
+                    ref["entry"].set(str(int(val)))
+                    ref["norm"].set(ref["to_norm"](int(val)))
+        except Exception as e:
+            logger.debug(f"Panel sync failed: {e}")
         self._refresh_view_buttons()
 
     def _update_loop(self):
