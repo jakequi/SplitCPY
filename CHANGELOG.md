@@ -17,7 +17,7 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 - **Test Connection & Auto-Set**: measures the handheld-to-PC Wi-Fi (response time, jitter, throughput) and picks the lowest Latency setting that keeps audio clean
 - **Waiting screen instead of a setup dialog**: with no device connected, DualCPY keeps looking and continues by itself the moment the Thor's Wireless debugging comes on (tip: add the Wireless debugging Quick Settings tile) - works after Thor or PC restarts with nothing to type
 - **Easier pairing**: open "Pair device with pairing code" on the Thor and DualCPY fills in the address - just type the 6-digit code
-- **Thor screens off while streaming** (switch or Ctrl+Alt+O): the top panel is switched off with scrcpy's Alt+O (mirroring keeps running) and the bottom panel goes to minimum brightness via Android's per-display brightness (the same call AYN's own slider makes; scrcpy can't power the bottom panel off on Android 13). Instant, no restart; everything comes back on when switched off, on exit, or - via scrcpy's on-device cleanup - if the stream ends unexpectedly
+- **Dim Thor screens** (switch or Ctrl+Alt+O): both handheld screens go to minimum brightness while you play on the monitor, through Android's per-display brightness (what AYN's own slider uses). Instant, no restart; each screen's brightness is restored when switched off, on exit, or after a crash on the next connect. (Powering panels off was tested and rejected: it blacks out or throttles the mirror to ~6 FPS, and the bottom panel ignores it)
 - **(i) buttons**: explanations in the control panel are hidden by default and shown per section
 - **Controller overlay (experimental)**: the Thor's controls drawn beside the bottom screen, lighting up live as you press them (read from the device over adb - nothing to install). Part of the stage window, so OBS captures it; the window widens just enough to fit. Idea, input handling and layout from [scrcpy-thor-ui](https://github.com/tommywaaf/scrcpy-thor-ui) by tommywaaf, rendering rewritten for DualCPY Split
 - **Renderer** setting: Direct3D 9 (default) or Direct3D 11 (can be smoother on Windows 11)
@@ -45,7 +45,9 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 ### Bugfixes
 - Start-up: scrcpy windows open off-screen and are adopted within ~0.1 s (no flashing/jumping), and the control panel opens beside the stage instead of on top of it
 - Ctrl+Alt+M could hide the panel instead of showing it while fullscreen
-- Fullscreen / Split Windows buttons are highlighted only while active
+- Fullscreen / Split buttons are highlighted only while active
+- Control panel opens flush against the stage (measures the visible frame, not Windows' invisible borders)
+- Tidier control panel: one row of mode buttons; experimental options (controller overlay, renderer) moved to Settings
 - USB audio buffer raised to 60 ms + 15 ms output (30 ms clicked on dense music - measured by scrcpy-thor-ui)
 - Screenshot button could crash the app (replaced dxcam with Windows screen capture; works on any monitor)
 - Overlapping stream restarts could orphan scrcpy processes that kept playing audio in the background

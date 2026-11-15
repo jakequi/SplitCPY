@@ -41,7 +41,7 @@ from src.custom_profile_store import CustomProfileStore
 from src.control_panel import show_loading_screen, CTkUI
 from src.device_profile_editor import DeviceProfileEditorDialog
 from src.win32_dock import (
-    Win32Dock, monitor_work_area, monitor_rect, frame_insets, apply_docked_style, send_scrcpy_shortcut,
+    Win32Dock, monitor_work_area, monitor_rect, frame_insets, apply_docked_style,
 )
 from src.viewport import ViewportManager, FULL_CROP
 from src.scrcpy_manager import valid_crop, ASPECT_PRESETS, ASPECT_ALIASES, FULL_SCREEN_LABEL
@@ -780,9 +780,6 @@ class Launcher:
                         if top:
                             self.viewports.adopt("top", top)
                             self.dock.hwnd_top = top
-                            if self.thor_screens_off:
-                                # give scrcpy a moment to finish connecting
-                                threading.Timer(2.0, self._reapply_screen_off).start()
                         bottom = self.user32.FindWindowW(None, bottom_title)
                         if bottom:
                             self.viewports.adopt("bottom", bottom)
@@ -1630,17 +1627,13 @@ class Launcher:
     # Dim the handheld's screens while streaming
     # ------------------------------------------------------------------
     # Tested on the Thor (Android 13):
-    #  - scrcpy's runtime shortcut Alt+O turns the TOP panel off and mirroring
-    #    keeps working (the --turn-screen-off start flag blacked out the mirror)
-    #  - scrcpy can't power the bottom panel off on Android 13 (Alt+O sent to
-    #    the bottom stream also switches the top one), so the bottom panel is
-    #    set to minimum brightness instead
-    # (dimmed through DisplayManager.setBrightness for display 4; the
-    # dual_screen_brightness_level setting turned out to be display-only)
-    # The bottom brightness is saved first and restored when switched off, on
-    # exit, or - after a crash - the next time DualCPY connects. The top panel
-    # is restored by scrcpy's on-device cleanup whenever the stream ends.
-    BRIGHTNESS_KEYS = ("dual_screen_brightness_level",)
+    #  - powering a panel off is no good: --turn-screen-off blacks out the
+    #    mirror, and runtime Alt+O makes Android compose the top screen at
+    #    ~6 fps; the bottom panel ignores power-off requests entirely
+    #  - so both panels are set to minimum brightness (~2 nits) through
+    #    DisplayManager.setBrightness(displayId) - what AYN's own slider does
+    # The previous brightness of each panel is saved first and restored when
+    # switched off, on exit, or - after a crash - the next time DualCPY connects.
 
     def _adb_shell(self, command, timeout=6):
         adb_bin = getattr(self.scrcpy, "adb_bin", None)
@@ -1678,29 +1671,50 @@ class Launcher:
         except Exception:
             return 4
 
+    def _panel_ids(self):
+        ids = []
+        for attr in ("top_display_id", "bottom_display_id"):
+            try:
+                ids.append(int(getattr(self.scrcpy.profile, attr)))
+            except Exception:
+                pass
+        return ids or [0, 4]
+
     def _dim_thor(self):
-        """Bottom panel to minimum brightness (the top one is switched off with Alt+O)"""
-        disp = self._bottom_display_id()
-        backup = self.config.get("thor_brightness_backup", None)
-        if not backup or "bottom_brightness" not in backup:
+        """
+        Both panels to minimum brightness. (Powering the top panel off with
+        scrcpy's Alt+O was tried first, but Android then only composes that
+        screen ~6 times a second, so the mirror stuttered - measured in the
+        scrcpy logs. Brightness doesn't affect composition.)
+        """
+        backup = self.config.get("thor_brightness_backup", None) or {}
+        panels = dict(backup.get("panels", {}))
+        for disp in self._panel_ids():
+            if str(disp) in panels:
+                continue
             current = self._parse_parcel_float(
                 self._adb_shell(f"service call display {self.TX_GET_BRIGHTNESS} i32 {disp}"))
             if current is None:
-                logger.warning("Couldn't read the bottom screen's brightness - leaving it alone")
-                return False
-            backup = dict(backup or {}, display=disp, bottom_brightness=current)
-            self.config.set("thor_brightness_backup", backup)
-            logger.info(f"Saved bottom screen brightness: {backup}")
-        ok = self._adb_shell(f"service call display {self.TX_SET_BRIGHTNESS} i32 {disp} f 0.0") is not None
-        logger.info(f"Bottom screen dimmed: {ok}")
+                logger.warning(f"Couldn't read display {disp}'s brightness - leaving it alone")
+                continue
+            panels[str(disp)] = current
+        if not panels:
+            return False
+        backup["panels"] = panels
+        self.config.set("thor_brightness_backup", backup)
+        logger.info(f"Saved Thor brightness: {backup}")
+        cmds = [f"service call display {self.TX_SET_BRIGHTNESS} i32 {d} f 0.0" for d in panels]
+        ok = self._adb_shell("; ".join(cmds)) is not None
+        logger.info(f"Thor screens dimmed: {ok}")
         return ok
 
     def _restore_thor_brightness(self):
         backup = self.config.get("thor_brightness_backup", None)
         if not backup:
             return True
-        cmds = []
-        if "bottom_brightness" in backup:
+        cmds = [f"service call display {self.TX_SET_BRIGHTNESS} i32 {int(d)} f {float(v):.6f}"
+                for d, v in backup.get("panels", {}).items()]
+        if "bottom_brightness" in backup:  # previous build: bottom only
             cmds.append(f"service call display {self.TX_SET_BRIGHTNESS} i32 "
                         f"{int(backup.get('display', 4))} f {float(backup['bottom_brightness']):.6f}")
         # Older DualCPY Split builds saved settings values instead
@@ -1722,21 +1736,14 @@ class Launcher:
         except Exception:
             pass
 
-        sent = send_scrcpy_shortcut(self.dock.hwnd_top, "o", shift=not off)
-
         def worker():
             ok = self._dim_thor() if off else self._restore_thor_brightness()
-            if ok and sent:
-                self._notify("Thor screens " + ("off" if off else "on"), "success")
+            if ok:
+                self._notify("Thor screens " + ("dimmed" if off else "restored"), "success")
             else:
                 self._notify("Couldn't reach the Thor - is it connected?", "error")
 
         threading.Thread(target=worker, daemon=True).start()
-
-    def _reapply_screen_off(self):
-        """A fresh top stream starts with the screen on - switch it off again"""
-        if self.thor_screens_off:
-            send_scrcpy_shortcut(self.dock.hwnd_top, "o", shift=False)
 
     def _apply_thor_screens_on_connect(self):
         """After connecting: undo a dim left over from a crash, then re-dim if wanted"""
@@ -2251,12 +2258,6 @@ class Launcher:
             self._overlay_listener.stop()
 
         # Give the Thor its screens back before disconnecting
-        try:
-            if self.thor_screens_off:
-                send_scrcpy_shortcut(self.dock.hwnd_top, "o", shift=True)
-                time.sleep(0.3)
-        except Exception:
-            pass
         try:
             if self.config.get("thor_brightness_backup", None):
                 self._restore_thor_brightness()

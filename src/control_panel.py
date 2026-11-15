@@ -280,6 +280,7 @@ class CTkUI:
         row.columnconfigure(1, weight=1)
         ctk.CTkLabel(row, text=label, font=make_font(13), text_color=TEXT_COLOUR,
                      width=110, anchor="w").grid(row=0, column=0, sticky="w")
+        row.columnconfigure(0, minsize=110)
         var = tk.StringVar(value=current)
         ctk.CTkOptionMenu(
             row, variable=var, values=list(values), command=command,
@@ -384,50 +385,44 @@ class CTkUI:
 
         row = ctk.CTkFrame(self._scroll, fg_color="transparent")
         row.pack(fill="x", padx=16, pady=(0, 4))
-        row.columnconfigure(0, weight=1)
-        row.columnconfigure(1, weight=1)
-        self._fullscreen_btn_text = tk.StringVar(value="Fullscreen (F11)")
-        self._fullscreen_btn = ctk.CTkButton(
-            row, textvariable=self._fullscreen_btn_text, command=self._on_fullscreen,
-            fg_color=PANEL_COLOUR, hover_color=BORDER_COLOUR,
-            border_color=BORDER_COLOUR, border_width=1,
-            text_color=TEXT_COLOUR, font=make_font(13),
-        )
-        self._fullscreen_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        for c in range(3):
+            row.columnconfigure(c, weight=1)
+
+        def mode_button(var_text, command, col):
+            b = ctk.CTkButton(
+                row, textvariable=var_text, command=command,
+                fg_color=PANEL_COLOUR, hover_color=BORDER_COLOUR,
+                border_color=BORDER_COLOUR, border_width=1,
+                text_color=TEXT_COLOUR, font=make_font(13),
+            )
+            b.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 3, 0 if col == 2 else 3))
+            return b
+
+        self._fullscreen_btn_text = tk.StringVar(value="Fullscreen")
+        self._fullscreen_btn = mode_button(self._fullscreen_btn_text, self._on_fullscreen, 0)
         self._dock_btn_text = tk.StringVar(value=self._dock_label())
-        self._dock_btn = ctk.CTkButton(
-            row, textvariable=self._dock_btn_text, command=self._on_dock_toggle,
-            fg_color=PANEL_COLOUR, hover_color=BORDER_COLOUR,
-            border_color=BORDER_COLOUR, border_width=1,
-            text_color=TEXT_COLOUR, font=make_font(13),
-        )
-        self._dock_btn.grid(row=0, column=1, sticky="ew", padx=(4, 0))
-        self._button(self._scroll, "Fit to Monitor", self._on_fit_to_monitor) \
-            .pack(fill="x", padx=16, pady=(4, 2))
+        self._dock_btn = mode_button(self._dock_btn_text, self._on_dock_toggle, 1)
+        mode_button(tk.StringVar(value="Fit"), self._on_fit_to_monitor, 2)
+
         self._screens_off_var = tk.BooleanVar(value=self.l.thor_screens_off)
         ctk.CTkSwitch(
-            self._scroll, text="Thor screens off while streaming (Ctrl+Alt+O)",
+            self._scroll, text="Dim Thor screens",
             variable=self._screens_off_var,
             command=lambda: self.l.set_thor_screens_off(bool(self._screens_off_var.get())),
             progress_color=ACCENT_COLOUR, text_color=TEXT_COLOUR, font=make_font(13),
         ).pack(anchor="w", padx=16, pady=(6, 2))
-        self._overlay_var = tk.BooleanVar(value=self.l.controller_overlay)
-        ctk.CTkSwitch(
-            self._scroll, text="Controller overlay beside bottom screen (experimental)",
-            variable=self._overlay_var,
-            command=lambda: self.l.set_controller_overlay(bool(self._overlay_var.get())),
-            progress_color=ACCENT_COLOUR, text_color=TEXT_COLOUR, font=make_font(13),
-        ).pack(anchor="w", padx=16, pady=(2, 2))
 
         self._build_slider("screen_gap", "Gap", self.l.screen_gap, 0, 200,
                            color=ACCENT_COLOUR, is_float=False,
                            on_change=self._on_gap_change)
 
         self._hint("The DualCPY window is always exactly the game area (no black bars): Both stacks "
-                   "the screens, Top / Bottom show one screen. Fullscreen centres it on a black "
-                   "background that OBS doesn't capture.\n"
+                   "the screens, Top / Bottom show one screen. Fullscreen (F11) centres it on a black "
+                   "background that OBS doesn't capture. Split = two separate windows. Fit = as big "
+                   "as the monitor allows. Dim Thor screens = both handheld screens to minimum "
+                   "brightness while you play on the monitor (restored afterwards).\n"
                    "Hotkeys (work in-game): Ctrl+Alt+1 Both, Ctrl+Alt+2 Top, Ctrl+Alt+3 Bottom, "
-                   "Ctrl+Alt+S cycle, Ctrl+Alt+F (or F11 when DualCPY is in front) fullscreen, Ctrl+Alt+M show/hide this menu, Ctrl+Alt+O Thor screens off/on.\n"
+                   "Ctrl+Alt+S cycle, Ctrl+Alt+F (or F11 when DualCPY is in front) fullscreen, Ctrl+Alt+M show/hide this menu, Ctrl+Alt+O dim Thor screens.\n"
                    "OBS: Window Capture the \"DualCPY | ...\" window, then right-click it > Transform > "
                    "Edit Transform > Bounding Box Type: \"Scale to inner bounds\", Alignment: Center. "
                    "Switching views is then seamless.")
@@ -477,12 +472,6 @@ class CTkUI:
             self._scroll, "Bottom FPS", ["Same as top", "30 FPS"],
             "30 FPS" if self.l.bottom_fps == 30 else "Same as top",
             lambda v: self._on_stream_option("bottom_fps", 30 if v.startswith("30") else 0))
-        from src.scrcpy_manager import RENDER_DRIVERS, RENDER_DRIVER_LABELS
-        self._renderer_label_to_key = {RENDER_DRIVER_LABELS[k]: k for k in RENDER_DRIVERS}
-        self._renderer_var = self._dropdown(
-            self._scroll, "Renderer", [RENDER_DRIVER_LABELS[k] for k in RENDER_DRIVERS],
-            RENDER_DRIVER_LABELS.get(self.l.render_driver, "Direct3D 9"),
-            lambda v: self._on_stream_option("render_driver", self._renderer_label_to_key[v]))
         self._hint("Audio output - PC, Device (sound stays on the handheld) or Both (Android 13+).\n"
                    "Latency - Low: smallest delay, full quality (USB / strong Wi-Fi). If sound warps "
                    "or crackles, try Balanced, then Stable.\n"
@@ -492,8 +481,6 @@ class CTkUI:
                    "120; it uses ~1.5x the bandwidth. OBS still records at its own rate (usually 60).\n"
                    "Bottom FPS - 30 frees the Thor's GPU for the top screen when the bottom is "
                    "mostly menus (3DS, many Android games); keep 'Same' for DS games.\n"
-                   "Renderer - Direct3D 11 can be smoother on Windows 11; switch back if you see "
-                   "black or flickering screens.\n"
                    "Changing these restarts the streams (a second or two).")
         test_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
         test_row.pack(fill="x", padx=16, pady=(4, 0))
@@ -506,7 +493,7 @@ class CTkUI:
         self._link_result = ctk.CTkLabel(self._scroll, text="", font=make_font(12),
                                          text_color=TEXT_COLOUR, anchor="w", justify="left",
                                          wraplength=400)
-        self._link_result.pack(anchor="w", padx=16, pady=(4, 0))
+        self._link_test_row = test_row  # result label is only shown once there is a result
         self._hint("Tests the Wi-Fi between the handheld and this PC (your internet speed doesn't "
                    "matter - the stream never leaves your home network) and picks the lowest Latency "
                    "setting that keeps audio clean. Takes ~10 seconds.")
@@ -515,7 +502,7 @@ class CTkUI:
         self._separator()
         self._section("Tools")
         grid = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        grid.pack(fill="x", padx=16, pady=(4, 20))
+        grid.pack(fill="x", padx=16, pady=(4, 4))
         grid.columnconfigure(0, weight=1)
         grid.columnconfigure(1, weight=1)
         self._button(grid, "Screenshot", self.take_screenshot) \
@@ -560,15 +547,33 @@ class CTkUI:
             variable=self._device_profiles_var, command=self._on_device_profiles_toggle,
             progress_color=ACCENT_COLOUR, text_color=TEXT_COLOUR, font=make_font(13),
         ).pack(anchor="w", padx=16, pady=(4, 2))
-        self._hint("Off: always uses the built-in AYN Thor profile and never asks which device "
-                   "you have. Takes effect next launch.")
+        self._overlay_var = tk.BooleanVar(value=self.l.controller_overlay)
+        ctk.CTkSwitch(
+            self._scroll, text="Controller overlay (experimental)",
+            variable=self._overlay_var,
+            command=lambda: self.l.set_controller_overlay(bool(self._overlay_var.get())),
+            progress_color=ACCENT_COLOUR, text_color=TEXT_COLOUR, font=make_font(13),
+        ).pack(anchor="w", padx=16, pady=(2, 4))
+        from src.scrcpy_manager import RENDER_DRIVERS, RENDER_DRIVER_LABELS
+        self._renderer_label_to_key = {RENDER_DRIVER_LABELS[k]: k for k in RENDER_DRIVERS}
+        self._renderer_var = self._dropdown(
+            self._scroll, "Renderer (experimental)", [RENDER_DRIVER_LABELS[k] for k in RENDER_DRIVERS],
+            RENDER_DRIVER_LABELS.get(self.l.render_driver, "Direct3D 9"),
+            lambda v: self._on_stream_option("render_driver", self._renderer_label_to_key[v]))
+        self._hint("Device profiles - off: always uses the built-in AYN Thor profile and never asks "
+                   "which device you have (applies next launch).\n"
+                   "Controller overlay - draws the Thor's buttons and sticks beside the bottom "
+                   "screen, lighting up live as you press them (Both / Bottom view). Great for "
+                   "streams; the window widens to fit it.\n"
+                   "Renderer - Direct3D 11 may be smoother on some PCs; switch back to Direct3D 9 "
+                   "if you see black or flickering screens.")
         ctk.CTkFrame(self._scroll, fg_color="transparent", height=16).pack()
         self._apply_device_profiles_state()
 
         self._refresh_view_buttons()
 
     def _dock_label(self):
-        return "Split Windows" if self.l.docked else "Combine Windows"
+        return "Split" if self.l.docked else "Combine"
 
     def _refresh_profile_label(self):
         try:
@@ -585,7 +590,7 @@ class CTkUI:
             label = {v: k for k, v in self._view_label_to_key.items()}[self.l.view_mode]
             self._view_seg.set(label)
             self._view_seg.configure(state="normal" if self.l.docked else "disabled")
-            self._fullscreen_btn_text.set("Exit Fullscreen (F11)" if self.l.fullscreen else "Fullscreen (F11)")
+            self._fullscreen_btn_text.set("Exit Fullscreen" if self.l.fullscreen else "Fullscreen")
             self._dock_btn_text.set(self._dock_label())
             # Highlight only while the mode is actually on
             for btn, on in ((self._fullscreen_btn, self.l.fullscreen), (self._dock_btn, not self.l.docked)):
@@ -883,36 +888,48 @@ class CTkUI:
         self._device_profiles_btn.configure(
             state="normal" if self.l.device_profiles_enabled else "disabled")
 
+    @staticmethod
+    def _visible_rect(hwnd):
+        """
+        Window rect WITHOUT Windows 10/11's invisible resize borders (what you
+        actually see), via DWMWA_EXTENDED_FRAME_BOUNDS; falls back to GetWindowRect.
+        """
+        r = wintypes.RECT()
+        try:
+            if windll.dwmapi.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(r), ctypes.sizeof(r)) == 0:
+                return r
+        except Exception:
+            pass
+        windll.user32.GetWindowRect(hwnd, ctypes.byref(r))
+        return r
+
     def place_beside_stage(self):
-        """Move the panel next to the DualCPY window (right, else left) so it doesn't cover it"""
+        """Put the panel flush against the DualCPY window (right side, else left)"""
         try:
             hwnd = self.l.hwnd_container
             if not hwnd or self.l.fullscreen or not self.l.docked:
                 return
             from src.win32_dock import monitor_work_area
-            stage = wintypes.RECT()
-            windll.user32.GetWindowRect(hwnd, ctypes.byref(stage))
             work = monitor_work_area(hwnd)
             if not work:
                 return
             self.window.update_idletasks()
             me = windll.user32.GetParent(self.window.winfo_id()) or self.window.winfo_id()
-            mine = wintypes.RECT()
-            windll.user32.GetWindowRect(me, ctypes.byref(mine))
-            pw, ph = mine.right - mine.left, mine.bottom - mine.top
-            # already clear of the stage? leave it where the user put it
-            if mine.right <= stage.left or mine.left >= stage.right or \
-                    mine.bottom <= stage.top or mine.top >= stage.bottom:
-                return
-            gap = 12
-            if stage.right + gap + pw <= work[2]:
-                x = stage.right + gap
-            elif stage.left - gap - pw >= work[0]:
-                x = stage.left - gap - pw
+            stage = self._visible_rect(hwnd)
+            vis = self._visible_rect(me)
+            outer = wintypes.RECT()
+            windll.user32.GetWindowRect(me, ctypes.byref(outer))
+            # invisible border thickness of the panel on each side
+            bl, bt = vis.left - outer.left, vis.top - outer.top
+            vw, vh = vis.right - vis.left, vis.bottom - vis.top
+            if stage.right + vw <= work[2]:
+                vx = stage.right                 # flush on the right
+            elif stage.left - vw >= work[0]:
+                vx = stage.left - vw             # flush on the left
             else:
                 return
-            y = max(work[1], min(stage.top, work[3] - ph))
-            windll.user32.SetWindowPos(me, 0, x, y, 0, 0, 0x0001 | 0x0004 | 0x0010)
+            vy = max(work[1], min(stage.top, work[3] - vh))
+            windll.user32.SetWindowPos(me, 0, vx - bl, vy - bt, 0, 0, 0x0001 | 0x0004 | 0x0010)
         except Exception as e:
             logger.debug(f"Panel placement failed: {e}")
 
@@ -969,6 +986,7 @@ class CTkUI:
 
     def _on_link_test(self):
         self._link_result.configure(text="Testing... (about 10 seconds)", text_color=TEXT_COLOUR)
+        self._link_result.pack(anchor="w", padx=16, pady=(4, 0), after=self._link_test_row)
         self.l.run_link_test()
 
     def on_link_test_result(self, result, key, reason, quality=None):
