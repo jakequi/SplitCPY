@@ -781,6 +781,7 @@ class Launcher:
                         if top:
                             self.viewports.adopt("top", top)
                             self.dock.hwnd_top = top
+                            self.scrcpy.top_ready.set()
                         bottom = self.user32.FindWindowW(None, bottom_title)
                         if bottom:
                             self.viewports.adopt("bottom", bottom)

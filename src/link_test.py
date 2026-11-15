@@ -43,7 +43,7 @@ DEVICE_TEST_PATH = "/data/local/tmp/dualcpy_linktest.bin"
 
 # Total video bitrate each profile needs over Wi-Fi at 60 FPS (Mbps, both screens),
 # from scrcpy_manager's WIRELESS_PROFILE. 120 FPS needs ~1.5x.
-PROFILE_NEED_MBPS = {"low": 28, "auto": 14, "stable": 7}
+PROFILE_NEED_MBPS = {"low": 28, "auto": 28, "stable": 7}
 # Audio buffer (ms) each profile has on Wi-Fi - jitter has to fit inside it
 PROFILE_AUDIO_BUFFER_MS = {"low": 80, "auto": 120, "stable": 250}
 # Required headroom: measured throughput / needed bitrate

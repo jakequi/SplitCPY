@@ -24,6 +24,7 @@ import time
 import ctypes
 import logging
 import subprocess
+import threading
 from src.device_detection import resolve_adb
 from src import process_guard
 
@@ -110,10 +111,13 @@ RENDER_DRIVER_LABELS = {"direct3d": "Direct3D 9", "direct3d11": "Direct3D 11"}
 #    the top screen when the bottom is mostly menus/controls
 BOTTOM_FPS_OPTIONS = (0, 30)   # 0 = same as top
 # Wi-Fi stream caps per latency profile: (top max size, bottom max size, Mbps per megapixel)
-# None = native resolution
+# None = native resolution. Latency is about audio buffering: Low and Balanced
+# both stream full resolution (Quality sets the bitrate); only Stable - meant
+# for weak / busy Wi-Fi - also lowers resolution and bitrate. (Balanced used to
+# drop to 1280x720 / 960x836, which looked blocky on fast Wi-Fi.)
 WIRELESS_PROFILE = {
     "low": (None, None, 8),
-    "auto": (1280, 960, 6),
+    "auto": (None, None, 8),
     "stable": (1024, 800, 4),
 }
 AUDIO_BIT_RATE = "128K"
@@ -293,6 +297,10 @@ class ScrcpyManager:
 
         self.f_w1 = self.f_h1 = self.f_w2 = self.f_h2 = 0
         self.set_scale(self.scale)
+        # Set by the launcher when it adopts the top stream's window. Once
+        # adopted the window is a child and FindWindowW can't see it any more,
+        # so start_scrcpy() must accept this as "the top window is up"
+        self.top_ready = threading.Event()
 
         # Locate scrcpy and adb binaries
         self.scrcpy_bin = scrcpy_bin or resolve_adb("scrcpy")
@@ -801,8 +809,9 @@ class ScrcpyManager:
         deadline = time.time() + 15.0
         while time.time() < deadline:
             hwnd = ctypes.windll.user32.FindWindowW(None, top_title)
-            if hwnd:
-                logger.info(f"Top screen window confirmed (HWND: {hwnd}), starting bottom screen")
+            if hwnd or self.top_ready.is_set():
+                logger.info(f"Top screen window confirmed ({'HWND ' + str(hwnd) if hwnd else 'adopted'}), "
+                            f"starting bottom screen")
                 break
             time.sleep(0.25)
         else:

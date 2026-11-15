@@ -1,5 +1,15 @@
 # Changelog
 
+## DualCPY Split 1.0.2 - 15-11-2026
+
+### Changed
+- New DualCPY Split icon (app, taskbar, title bars, splash, README)
+- Balanced latency now streams at full resolution and bitrate like Low - only the audio buffer is larger. Only Stable (for weak Wi-Fi) lowers resolution
+
+### Bugfixes
+- Bottom screen took ~15 s to appear after a stream restart (e.g. after changing a setting or Test Connection): the top window was adopted before the start-up check could see it, so the check waited for its full timeout
+- Blocky / soft picture after Test Connection picked Balanced on Wi-Fi (it also cut the stream to 1280x720 and 960x836)
+
 ## DualCPY Split 1.0.1 - 15-11-2026
 
 ### Bugfixes
