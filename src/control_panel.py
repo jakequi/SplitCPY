@@ -389,11 +389,14 @@ class CTkUI:
                            color=ACCENT_COLOUR, is_float=False,
                            on_change=self._on_gap_change)
 
-        self._hint("The DualCPY window always fills itself with the chosen view: Both stacks the "
-                   "screens, Top / Bottom show one screen as big as fits (side bars stay).\n"
+        self._hint("The DualCPY window is always exactly the game area (no black bars): Both stacks "
+                   "the screens, Top / Bottom show one screen. Fullscreen centres it on a black "
+                   "background that OBS doesn't capture.\n"
                    "Hotkeys (work in-game): Ctrl+Alt+1 Both, Ctrl+Alt+2 Top, Ctrl+Alt+3 Bottom, "
                    "Ctrl+Alt+S cycle, Ctrl+Alt+F fullscreen.\n"
-                   "OBS: add a Window Capture of the \"DualCPY | ...\" window.")
+                   "OBS: Window Capture the \"DualCPY | ...\" window, then right-click it > Transform > "
+                   "Edit Transform > Bounding Box Type: \"Scale to inner bounds\", Alignment: Center. "
+                   "Switching views is then seamless.")
 
         # -------------------------------------------------------- Aspect
         self._separator()

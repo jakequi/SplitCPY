@@ -5,8 +5,9 @@
 Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 
 ### Added
-- **View: Both / Top / Bottom** - the combined window is now a stage that always fills itself: Both stacks the screens, Top / Bottom show one screen as large as fits (natural side bars). Made for OBS Window Capture
-- **Fullscreen** (borderless, on the window's monitor) and a **Gap** slider between stacked screens
+- **View: Both / Top / Bottom** - the combined window is always exactly the game area (no black bars for OBS to capture): Both stacks the screens, Top / Bottom show one screen. Switching keeps the window height; dragging the edges keeps the shape
+- **Fullscreen**: the game area is centred on the monitor at the largest size, over a separate black backdrop window that OBS's Window Capture never sees
+- **Gap** slider between stacked screens
 - **Global hotkeys** (work in-game): Ctrl+Alt+1 Both, Ctrl+Alt+2 Top, Ctrl+Alt+3 Bottom, Ctrl+Alt+S cycle, Ctrl+Alt+F fullscreen
 - **Aspect presets for retro systems** (DS, 3DS top, GBA, Game Boy, NES/SNES, Virtual Boy, Neo Geo Pocket, Thor bottom 31:27, ...) - cropping is done on the PC side, so it's instant and never restarts the stream
 - **Volume slider** (sets the stream's volume in the Windows mixer)
@@ -29,6 +30,7 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 - Screenshot button could crash the app (replaced dxcam with Windows screen capture; works on any monitor)
 - Overlapping stream restarts could orphan scrcpy processes that kept playing audio in the background
 - UI updates from background threads could crash Tk (now queued to the UI thread)
+- Window borders appeared around the screens after leaving fullscreen (scrcpy/SDL re-adding its frame is now detected and removed)
 - Status messages disappeared after the first one
 - Running from source crashed on an incorrect `ui_constants` import
 - Wireless-debugging (mDNS) serials weren't recognised as wireless

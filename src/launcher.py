@@ -40,7 +40,7 @@ from src.device_selector import show_device_selector
 from src.custom_profile_store import CustomProfileStore
 from src.control_panel import show_loading_screen, CTkUI
 from src.device_profile_editor import DeviceProfileEditorDialog
-from src.win32_dock import Win32Dock, monitor_work_area, monitor_rect, frame_insets
+from src.win32_dock import Win32Dock, monitor_work_area, monitor_rect, frame_insets, apply_docked_style
 from src.viewport import ViewportManager, FULL_CROP
 from src.scrcpy_manager import valid_crop, ASPECT_PRESETS, ASPECT_ALIASES
 from src import app_volume
@@ -105,6 +105,17 @@ HOTKEYS = {
     5: (ord("F"), "fullscreen"),
 }
 WS_POPUP = 0x80000000
+WS_MAXIMIZEBOX = 0x00010000
+WS_CAPTION = 0x00C00000
+WS_THICKFRAME = 0x00040000
+WS_CHILD = 0x40000000
+# No maximise box: the window always takes the exact shape of the game area
+CONTAINER_STYLE = (WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX) | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS
+WM_ACTIVATE = 0x0006
+WM_SIZING = 0x0214
+WM_EXITSIZEMOVE = 0x0232
+WMSZ_TOP, WMSZ_BOTTOM = 3, 6
+WMSZ_TOPLEFT, WMSZ_TOPRIGHT = 4, 5
 
 
 class Launcher:
@@ -176,6 +187,14 @@ class Launcher:
         self.view_rects = {}            # key -> (x, y, w, h) in container client coords
         self.fullscreen = False
         self._normal_placement = None   # (style, rect) to restore after fullscreen
+        self.hwnd_backdrop = None       # black window behind the stage in fullscreen
+        self._backdrop_proc = None
+        # Height of the windowed stage; the width follows the view's shape, so
+        # switching Both / Top / Bottom keeps the same height in OBS
+        try:
+            self.stage_height = int(self.config.get("stage_height", 0)) or None
+        except (TypeError, ValueError):
+            self.stage_height = None
 
         # PC volume of the stream (0-100), applied to scrcpy's audio session
         try:
@@ -296,15 +315,19 @@ class Launcher:
         self.tx, self.ty, self.bx, self.by = layout["tx"], layout["ty"], layout["bx"], layout["by"]
 
     def _container_client_size(self):
-        """Initial client size: last saved size, else both screens stacked at the current scale"""
-        saved = self.config.get("container_client", None)
-        try:
-            if saved and int(saved[0]) >= 160 and int(saved[1]) >= 160:
-                return int(saved[0]), int(saved[1])
-        except (TypeError, ValueError, IndexError):
-            pass
+        """Initial client size: the current view's game area at the saved height"""
         s = self.scrcpy
-        return max(1, max(s.f_w1, s.f_w2)), max(1, s.f_h1 + s.f_h2 + self.screen_gap)
+        if not self.stage_height:
+            self.stage_height = max(160, s.f_h1 + s.f_h2 + self.screen_gap)
+        w, h = self._content_size_for_height(self.stage_height)
+        work = monitor_work_area(None)
+        if work:
+            il, it, ir, ib = frame_insets(CONTAINER_STYLE, WS_EX_CONTROLPARENT)
+            max_w = work[2] - work[0] - il - ir
+            max_h = work[3] - work[1] - it - ib
+            if w > max_w or h > max_h:
+                w, h = self._content_fit(min(w, max_w), min(h, max_h))
+        return max(1, int(round(w))), max(1, int(round(h)))
 
     def get_default_layout(self):
         """
@@ -339,6 +362,8 @@ class Launcher:
             placement = self._container_placement()
             if placement:
                 cfg["container_pos"], cfg["container_client"] = placement
+            if self.stage_height:
+                cfg["stage_height"] = int(self.stage_height)
 
             if self.scrcpy and getattr(self.scrcpy, "profile", None):
                 cfg["last_profile"] = self.scrcpy.profile.name
@@ -394,6 +419,20 @@ class Launcher:
                 if msg == WM_SIZE:
                     # The stage always fills the window: re-layout on every resize
                     self.layout_windows()
+
+                elif msg == WM_SIZING and self.docked and not self.fullscreen:
+                    # Keep the window exactly the shape of the game area while dragging
+                    self._keep_stage_shape(int(wp), lp)
+                    return 1
+
+                elif msg == WM_EXITSIZEMOVE and self.docked and not self.fullscreen:
+                    rc = wintypes.RECT()
+                    self.user32.GetClientRect(hwnd, ctypes.byref(rc))
+                    if rc.bottom > 50:
+                        self.stage_height = rc.bottom
+
+                elif msg == WM_ACTIVATE and self.fullscreen:
+                    self._place_backdrop()
 
                 elif msg == WM_HOTKEY:
                     self._on_hotkey(int(wp))
@@ -613,7 +652,7 @@ class Launcher:
 
             # Adjustments for window decorations
             rect = wintypes.RECT(0, 0, int(client_w), int(client_h))
-            style = WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS
+            style = CONTAINER_STYLE
             self.user32.AdjustWindowRectEx(
                 ctypes.byref(rect), style, False, WS_EX_CONTROLPARENT
             )
@@ -654,6 +693,11 @@ class Launcher:
                 except Exception as e:
                     logger.error(f"Failed to create viewports: {e}", exc_info=True)
 
+                try:
+                    self._create_backdrop(hinst)
+                except Exception as e:
+                    logger.error(f"Failed to create fullscreen backdrop: {e}", exc_info=True)
+
                 # Global hotkeys must be registered on the thread that owns hwnd
                 for hk_id, (vk, action) in HOTKEYS.items():
                     if not self.user32.RegisterHotKey(hwnd, hk_id, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, vk):
@@ -693,6 +737,7 @@ class Launcher:
                         if bottom:
                             self.viewports.adopt("bottom", bottom)
                             self.dock.hwnd_bottom = bottom
+                self._enforce_child_styles()
                 self._check_stream_health()
                 if self.audio_mode != "device" and not self._restarting:
                     self._apply_volume()
@@ -738,7 +783,17 @@ class Launcher:
             w, h = (w1, h1) if self.view_mode == "top" else (w2, h2)
             k = min(cw / w, ch / h)
             rects[self.view_mode] = ((cw - w * k) / 2, (ch - h * k) / 2, w * k, h * k)
-        return {key: (tuple(int(round(v)) for v in r) if r else None) for key, r in rects.items()}
+        out = {key: (list(int(round(v)) for v in r) if r else None) for key, r in rects.items()}
+        if self.view_mode == "both":
+            # Absorb rounding so the stack exactly fills a window sized to it
+            # (otherwise OBS captures a 1px black line)
+            top, bot = out["top"], out["bottom"]
+            spare = ch - (top[3] + bot[3] + g)
+            if 0 < abs(spare) <= 2:
+                top[1] = 0
+                bot[1] = top[3] + g
+                bot[3] += spare
+        return {key: (tuple(r) if r else None) for key, r in out.items()}
 
     def layout_windows(self, force=False):
         """Lay out the viewports inside the container for the current view"""
@@ -770,7 +825,7 @@ class Launcher:
             return
         self.view_mode = mode
         logger.info(f"View mode -> {mode}")
-        self.layout_windows(force=True)
+        self.fit_container_to_content()
         try:
             self.config.set("view_mode", mode)
         except Exception:
@@ -784,7 +839,7 @@ class Launcher:
 
     def set_screen_gap(self, gap):
         self.screen_gap = max(0, min(MAX_SCREEN_GAP, int(gap)))
-        self.layout_windows(force=True)
+        self.fit_container_to_content()
 
     def _on_hotkey(self, hk_id):
         action = HOTKEYS.get(hk_id, (None, None))[1]
@@ -795,8 +850,159 @@ class Launcher:
                 return
             self.set_view_mode(action)
 
+    # ------------------------------------------------------------------
+    # Stage shape: the window is always exactly the game area (no black
+    # bars for OBS to capture)
+    # ------------------------------------------------------------------
+    def _stage_units(self):
+        """Unscaled sizes for the current view: (w, h, gap) with h excluding gap"""
+        w1, h1, w2, h2 = self.scrcpy.content_sizes(1.0)
+        if self.view_mode == "both":
+            return max(w1, w2), h1 + h2, self.screen_gap
+        if self.view_mode == "top":
+            return w1, h1, 0
+        return w2, h2, 0
+
+    def _content_size_for_height(self, height):
+        w, h, g = self._stage_units()
+        k = max(0.01, (height - g) / h)
+        return w * k, h * k + g
+
+    def _content_size_for_width(self, width):
+        w, h, g = self._stage_units()
+        k = width / w
+        return width, h * k + g
+
+    def _content_fit(self, box_w, box_h):
+        """Largest game-area size that fits in box_w x box_h"""
+        w, h, g = self._stage_units()
+        k = max(0.01, min(box_w / w, (box_h - g) / h))
+        return w * k, h * k + g
+
+    def _keep_stage_shape(self, edge, lp):
+        rect = ctypes.cast(lp, ctypes.POINTER(wintypes.RECT)).contents
+        il, it, ir, ib = frame_insets(CONTAINER_STYLE, WS_EX_CONTROLPARENT)
+        cw = (rect.right - rect.left) - il - ir
+        ch = (rect.bottom - rect.top) - it - ib
+        if edge in (WMSZ_TOP, WMSZ_BOTTOM):
+            cw, _ = self._content_size_for_height(ch)
+            rect.right = rect.left + int(round(cw)) + il + ir
+        else:
+            _, ch = self._content_size_for_width(cw)
+            ch = int(round(ch))
+            if edge in (WMSZ_TOPLEFT, WMSZ_TOPRIGHT):
+                rect.top = rect.bottom - ch - it - ib
+            else:
+                rect.bottom = rect.top + ch + it + ib
+
+    def fit_container_to_content(self, center=False):
+        """
+        Resize the combined window to exactly the game area of the current
+        view. Windowed: keeps the stage height (width follows the view's
+        shape), stays on the monitor. Fullscreen: largest size that fits the
+        monitor, centred over the black backdrop.
+        """
+        hwnd = self.hwnd_container
+        if not hwnd or not self.scrcpy or not self.docked:
+            self.layout_windows(force=True)
+            return
+        flags = 0x0004 | 0x0010  # NOZORDER | NOACTIVATE
+        if self.fullscreen:
+            mon = monitor_rect(hwnd)
+            if mon:
+                l, t, r, b = mon
+                w, h = (int(round(v)) for v in self._content_fit(r - l, b - t))
+                self.user32.SetWindowPos(hwnd, 0, l + (r - l - w) // 2, t + (b - t - h) // 2, w, h, flags)
+                self._place_backdrop()
+        else:
+            work = monitor_work_area(hwnd)
+            il, it, ir, ib = frame_insets(CONTAINER_STYLE, WS_EX_CONTROLPARENT)
+            w, h = self._content_size_for_height(self.stage_height or 600)
+            if work:
+                max_w = work[2] - work[0] - il - ir
+                max_h = work[3] - work[1] - it - ib
+                if w > max_w or h > max_h:
+                    w, h = self._content_fit(min(w, max_w), min(h, max_h))
+            w, h = int(round(w)), int(round(h))
+            ow, oh = w + il + ir, h + it + ib
+            cur = wintypes.RECT()
+            self.user32.GetWindowRect(hwnd, ctypes.byref(cur))
+            if center and work:
+                x = work[0] + (work[2] - work[0] - ow) // 2
+                y = work[1] + (work[3] - work[1] - oh) // 2
+            else:
+                # Keep the window's horizontal centre and top edge
+                x = (cur.left + cur.right) // 2 - ow // 2
+                y = cur.top
+            if work:
+                x = max(work[0] - il, min(x, work[2] - ow + ir))
+                y = max(work[1], min(y, work[3] - oh + ib))
+            self.user32.SetWindowPos(hwnd, 0, x, y, ow, oh, flags)
+        self.layout_windows(force=True)
+
+    # ------------------------------------------------------------------
+    # Fullscreen: stage window = game area, black backdrop behind it
+    # ------------------------------------------------------------------
+    def _create_backdrop(self, hinst):
+        """A plain black popup covering the monitor behind the stage in fullscreen.
+        It's a separate window, so OBS's Window Capture of the stage never sees it."""
+        WNDPROC = ctypes.WINFUNCTYPE(self.LRESULT, wintypes.HWND, wintypes.UINT, self.WPARAM, self.LPARAM)
+
+        def proc(hwnd, msg, wp, lp):
+            if msg == WM_CLOSE:
+                return 0
+            if msg == WM_MOUSEACTIVATE:
+                # Clicking the black area gives focus back to the game
+                if self.hwnd_container:
+                    self.user32.SetForegroundWindow(self.hwnd_container)
+                return 3  # MA_NOACTIVATE
+            return self.user32.DefWindowProcW(hwnd, msg, wp, lp)
+
+        self._backdrop_proc = WNDPROC(proc)
+
+        class WNDCLASSEX(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.UINT), ("style", wintypes.UINT),
+                ("lpfnWndProc", ctypes.c_void_p), ("cbClsExtra", ctypes.c_int),
+                ("cbWndExtra", ctypes.c_int), ("hInstance", wintypes.HINSTANCE),
+                ("hIcon", wintypes.HANDLE), ("hCursor", wintypes.HANDLE),
+                ("hbrBackground", wintypes.HANDLE), ("lpszMenuName", wintypes.LPCWSTR),
+                ("lpszClassName", wintypes.LPCWSTR), ("hIconSm", wintypes.HANDLE),
+            ]
+
+        wc = WNDCLASSEX()
+        wc.cbSize = ctypes.sizeof(WNDCLASSEX)
+        wc.lpfnWndProc = ctypes.cast(self._backdrop_proc, ctypes.c_void_p).value
+        wc.lpszClassName = "DualCPYBackdrop"
+        wc.hInstance = hinst
+        wc.hbrBackground = ctypes.windll.gdi32.GetStockObject(BLACK_BRUSH)
+        self.user32.RegisterClassExW(ctypes.byref(wc))
+        WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE = 0x00000080, 0x08000000
+        self.user32.CreateWindowExW.restype = wintypes.HWND
+        self.hwnd_backdrop = self.user32.CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, "DualCPYBackdrop", "DualCPY Backdrop",
+            WS_POPUP, 0, 0, 10, 10, None, None, ctypes.c_void_p(hinst), None,
+        )
+
+    def _place_backdrop(self):
+        """Cover the monitor with the backdrop, directly beneath the stage"""
+        if not (self.hwnd_backdrop and self.fullscreen):
+            return
+        mon = monitor_rect(self.hwnd_container)
+        if not mon:
+            return
+        l, t, r, b = mon
+        SWP_NOACTIVATE, SWP_SHOWWINDOW = 0x0010, 0x0040
+        self.user32.SetWindowPos(self.hwnd_backdrop, self.hwnd_container, l, t, r - l, b - t,
+                                 SWP_NOACTIVATE | SWP_SHOWWINDOW)
+
     def toggle_fullscreen(self):
-        """Borderless fullscreen of the combined window on its monitor (great for OBS)"""
+        """
+        Fullscreen for OBS: the stage window becomes borderless and exactly the
+        game area, as large as the monitor allows and centred; a separate black
+        window fills the rest of the monitor. Window Capture of the stage
+        therefore only ever contains the game.
+        """
         if not self.hwnd_container:
             return
         if not self.docked:
@@ -806,24 +1012,26 @@ class Launcher:
         if not self.fullscreen:
             rect = wintypes.RECT()
             self.user32.GetWindowRect(hwnd, ctypes.byref(rect))
-            self._normal_placement = (self.user32.GetWindowLongW(hwnd, GWL_STYLE),
-                                      (rect.left, rect.top, rect.right, rect.bottom))
-            mon = monitor_rect(hwnd)
-            if not mon:
-                return
+            self._normal_placement = (rect.left, rect.top, rect.right, rect.bottom)
             self.user32.SetWindowLongW(hwnd, GWL_STYLE,
                                        WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS)
-            l, t, r, b = mon
-            self.user32.SetWindowPos(hwnd, 0, l, t, r - l, b - t, 0x0020 | 0x0040)  # FRAMECHANGED|SHOWWINDOW
+            self.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+                                     0x0001 | 0x0002 | 0x0004 | 0x0020)  # NOSIZE|NOMOVE|NOZORDER|FRAMECHANGED
             self.fullscreen = True
+            self.fit_container_to_content()
+            self.user32.SetForegroundWindow(hwnd)
         else:
-            style, (l, t, r, b) = self._normal_placement or (
-                WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, (100, 100, 1000, 900))
-            self.user32.SetWindowLongW(hwnd, GWL_STYLE, style)
-            self.user32.SetWindowPos(hwnd, 0, l, t, r - l, b - t, 0x0020 | 0x0040)
+            if self.hwnd_backdrop:
+                self.user32.ShowWindow(self.hwnd_backdrop, SW_HIDE)
+            self.user32.SetWindowLongW(hwnd, GWL_STYLE, CONTAINER_STYLE)
+            l, t, r, b = self._normal_placement or (100, 100, 1000, 900)
+            self.user32.SetWindowPos(hwnd, 0, l, t, r - l, b - t, 0x0004 | 0x0020 | 0x0040)
             self.fullscreen = False
             enable_dark_titlebar(hwnd)
-        self.layout_windows(force=True)
+            self.fit_container_to_content()
+        # SDL can re-add a frame to the scrcpy windows after big resizes
+        self._enforce_child_styles()
+        threading.Timer(0.4, self._enforce_child_styles).start()
         logger.info(f"Fullscreen -> {self.fullscreen}")
         ui = getattr(self, "ui", None)
         if ui:
@@ -832,13 +1040,29 @@ class Launcher:
             except Exception:
                 pass
 
+    def _enforce_child_styles(self):
+        """
+        Make sure the scrcpy windows stay borderless child windows. SDL can
+        restore its own title bar/frame after large resizes (e.g. leaving
+        fullscreen), which showed up as window borders around the screens.
+        """
+        for key, v in self.viewports.views.items():
+            child = v.child
+            if not child or not self.user32.IsWindow(child):
+                continue
+            style = self.user32.GetWindowLongW(child, -16) & 0xFFFFFFFF
+            if style & (WS_CAPTION | WS_THICKFRAME) or not style & WS_CHILD:
+                logger.info(f"scrcpy {key} window regained a frame (0x{style:08x}) - removing it")
+                apply_docked_style(child)
+                self.viewports.layout_inner(key, force=True)
+
     def _container_placement(self):
         """((x, y), (client_w, client_h)) of the normal (non-fullscreen) container"""
         if not self.hwnd_container or not self.user32.IsWindow(self.hwnd_container):
             return None
         if self.fullscreen and self._normal_placement:
-            _, (l, t, r, b) = self._normal_placement
-            il, it, ir, ib = frame_insets(WS_OVERLAPPEDWINDOW, WS_EX_CONTROLPARENT)
+            l, t, r, b = self._normal_placement
+            il, it, ir, ib = frame_insets(CONTAINER_STYLE, WS_EX_CONTROLPARENT)
             return [l, t], [r - l - il - ir, b - t - it - ib]
         if self.user32.IsIconic(self.hwnd_container) or self.user32.IsZoomed(self.hwnd_container):
             return None
@@ -922,7 +1146,7 @@ class Launcher:
         logger.info(f"Crop {key} -> {aspect_name} {crop}")
 
         if self.docked:
-            self.layout_windows(force=True)
+            self.fit_container_to_content()
         else:
             # Keep the split window's width, adjust its height to the new shape
             w, _ = self.viewports.client_size(key)
@@ -1065,7 +1289,11 @@ class Launcher:
         if self.docked:
             if self.fullscreen:
                 self.toggle_fullscreen()
-            self.user32.ShowWindow(self.hwnd_container, 3)  # SW_MAXIMIZE
+            self.stage_height = 100000   # capped to the monitor by fit_container_to_content
+            self.fit_container_to_content(center=True)
+            rc = wintypes.RECT()
+            self.user32.GetClientRect(self.hwnd_container, ctypes.byref(rc))
+            self.stage_height = rc.bottom
             return True
 
         work = monitor_work_area(self.viewports.views["top"].hwnd)
@@ -1115,7 +1343,7 @@ class Launcher:
                 self.user32.ShowWindow(self.hwnd_container, SW_SHOW)
                 self.viewports.to_docked(self.hwnd_container)
                 self.docked = True
-                self.layout_windows(force=True)
+                self.fit_container_to_content()
                 logger.info("Windows combined")
         self._request_dock = False
 
