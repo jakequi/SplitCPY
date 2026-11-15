@@ -233,12 +233,46 @@ def main():
 
     # Make sure scrcpy/adb always die with us, even after a crash
     from src import process_guard
+    from src.device_detection import resolve_adb
     process_guard.init()
+
+    # Close any scrcpy left running by an earlier session (crash, Ctrl+C...)
+    try:
+        stale = process_guard.kill_stale(resolve_adb("scrcpy"))
+        if stale:
+            logger.warning(f"Closed {stale} leftover scrcpy process(es) from a previous session")
+    except Exception as StaleErr:
+        logger.warning(f"Leftover check failed: {StaleErr}")
 
     # Create the main launcher object and start it
     logger.info("Initializing launcher")
     app = Launcher()
-    app.launch()
+
+    # Closing the terminal window (or logging off) -> clean shutdown
+    CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT = 2, 5, 6
+    HandlerRoutine = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+
+    def _console_handler(event):
+        if event in (CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT):
+            logger.info(f"Console event {event} - shutting down")
+            app.stop()
+            return True
+        return False  # Ctrl+C etc. -> KeyboardInterrupt, handled below
+
+    app._console_handler = HandlerRoutine(_console_handler)  # keep a reference
+    try:
+        ctypes.windll.kernel32.SetConsoleCtrlHandler(app._console_handler, True)
+    except Exception:
+        pass
+
+    try:
+        app.launch()
+    except KeyboardInterrupt:
+        logger.info("Ctrl+C - shutting down")
+    finally:
+        # Ctrl+C or an unexpected error: still stop the streams, disconnect and
+        # stop adb (stop() is a no-op if it already ran)
+        app.stop()
 
 
 if __name__ == "__main__":

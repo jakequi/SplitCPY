@@ -109,8 +109,12 @@ def init():
 
 
 def adopt(popen):
-    """Add a child process to the job (only needed if DualCPY itself isn't in it)."""
-    if not _job or _self_in_job:
+    """
+    Add a child process to the job explicitly. Even when DualCPY itself is in
+    the job, some Pythons (e.g. the Microsoft Store build) let children escape
+    it, so never rely on inheritance alone.
+    """
+    if not _job:
         return
     try:
         handle = getattr(popen, "_handle", None)
@@ -123,3 +127,60 @@ def adopt(popen):
 def breakaway_flags():
     """Creation flags for a process that must outlive DualCPY (e.g. app restart)."""
     return CREATE_BREAKAWAY_FROM_JOB if _self_in_job else 0
+
+
+# ----------------------------------------------------------------------
+# Leftovers from earlier sessions
+# ----------------------------------------------------------------------
+class _PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260),
+    ]
+
+
+def kill_stale(exe_path):
+    """
+    Close any process running `exe_path` (our bundled scrcpy.exe) left over
+    from an earlier DualCPY session - e.g. after a crash or Ctrl+C under a
+    Python that lets children escape the job. Returns how many were closed.
+    """
+    import os
+    if not exe_path:
+        return 0
+    target = os.path.normcase(os.path.abspath(exe_path))
+    name = os.path.basename(target)
+    TH32CS_SNAPPROCESS = 0x2
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not snap or snap == wintypes.HANDLE(-1).value:
+        return 0
+    killed = 0
+    try:
+        entry = _PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
+        ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
+        while ok:
+            if entry.szExeFile.lower() == name:
+                h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+                                         False, entry.th32ProcessID)
+                if h:
+                    try:
+                        buf = ctypes.create_unicode_buffer(1024)
+                        size = wintypes.DWORD(1024)
+                        if kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                            if os.path.normcase(buf.value) == target:
+                                if kernel32.TerminateProcess(h, 1):
+                                    killed += 1
+                                    logger.info(f"Closed leftover {name} (PID {entry.th32ProcessID})")
+                    finally:
+                        kernel32.CloseHandle(h)
+            ok = kernel32.Process32NextW(snap, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snap)
+    return killed
