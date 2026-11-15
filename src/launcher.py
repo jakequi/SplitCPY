@@ -321,7 +321,6 @@ class Launcher:
             audio_latency=self.audio_latency,
             crops=self.crops,
             quality=self.quality,
-            screens_off=self.thor_screens_off,
         )
 
     def _apply_default_layout(self):
@@ -1139,7 +1138,9 @@ class Launcher:
         if not data or not self.scrcpy:
             return
         restart = False
-        for key in ("audio_mode", "audio_latency", "quality", "thor_screens_off"):
+        if "thor_screens_off" in data and bool(data["thor_screens_off"]) != self.thor_screens_off:
+            self.set_thor_screens_off(bool(data["thor_screens_off"]))
+        for key in ("audio_mode", "audio_latency", "quality"):
             if key in data and data[key] != getattr(self, key):
                 setattr(self, key, data[key])
                 self.config.set(key, data[key])
@@ -1415,10 +1416,86 @@ class Launcher:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    # ------------------------------------------------------------------
+    # Dim the handheld's screens while streaming
+    # ------------------------------------------------------------------
+    # Powering the panels off (scrcpy --turn-screen-off) doesn't work on the
+    # Thor: the mirror goes black and only the top panel switches off. Instead
+    # both panels are set to minimum brightness (~2 nits): the picture keeps
+    # streaming and the screens are practically dark. The user's brightness
+    # is saved first and restored when switched off, on exit, or - after a
+    # crash - the next time DualCPY connects.
+    BRIGHTNESS_KEYS = ("screen_brightness_mode", "screen_brightness", "dual_screen_brightness_level")
+
+    def _adb_shell(self, command, timeout=6):
+        adb_bin = getattr(self.scrcpy, "adb_bin", None)
+        serial = getattr(self.scrcpy, "serial", None)
+        if not adb_bin or not serial:
+            return None
+        try:
+            r = subprocess.run([adb_bin, "-s", serial, "shell", command], capture_output=True,
+                               text=True, timeout=timeout, creationflags=CREATE_NO_WINDOW)
+            return r.stdout if r.returncode == 0 else None
+        except Exception as e:
+            logger.warning(f"adb shell failed ({command[:40]}...): {e}")
+            return None
+
+    def _dim_thor(self):
+        backup = self.config.get("thor_brightness_backup", None)
+        if not backup:
+            out = self._adb_shell("; ".join(f"settings get system {k}" for k in self.BRIGHTNESS_KEYS))
+            if out is None:
+                return False
+            values = [v.strip() for v in out.strip().splitlines()]
+            backup = {k: v for k, v in zip(self.BRIGHTNESS_KEYS, values) if v and v != "null"}
+            self.config.set("thor_brightness_backup", backup)
+            logger.info(f"Saved Thor brightness: {backup}")
+        cmds = ["settings put system screen_brightness_mode 0",
+                "settings put system screen_brightness 0"]
+        if "dual_screen_brightness_level" in backup:
+            cmds.append("settings put system dual_screen_brightness_level 0")
+        ok = self._adb_shell("; ".join(cmds)) is not None
+        logger.info(f"Thor screens dimmed: {ok}")
+        return ok
+
+    def _restore_thor_brightness(self):
+        backup = self.config.get("thor_brightness_backup", None)
+        if not backup:
+            return True
+        cmds = [f"settings put system {k} {v}" for k, v in backup.items() if k in self.BRIGHTNESS_KEYS]
+        ok = self._adb_shell("; ".join(cmds)) is not None
+        if ok:
+            cfg = self.config.load()
+            cfg.pop("thor_brightness_backup", None)
+            self.config.save(cfg)
+            logger.info(f"Thor brightness restored: {backup}")
+        return ok
+
     def set_thor_screens_off(self, off):
-        """Turn the handheld's screens off/on (applied with a quick stream restart)"""
-        self.set_stream_options({"thor_screens_off": bool(off)})
-        self._notify("Thor screens " + ("off" if off else "on") + " - restarting streams...", "info")
+        """Dim (off=True) or restore the handheld's screens. Instant, no restart."""
+        self.thor_screens_off = bool(off)
+        try:
+            self.config.set("thor_screens_off", self.thor_screens_off)
+        except Exception:
+            pass
+
+        def worker():
+            ok = self._dim_thor() if off else self._restore_thor_brightness()
+            if ok:
+                self._notify("Thor screens " + ("dimmed" if off else "restored"), "success")
+            else:
+                self._notify("Couldn't change the Thor's brightness - is it connected?", "error")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_thor_screens_on_connect(self):
+        """After connecting: undo a dim left over from a crash, then re-dim if wanted"""
+        def worker():
+            if self.config.get("thor_brightness_backup", None) and not self.thor_screens_off:
+                self._restore_thor_brightness()
+            if self.thor_screens_off:
+                self._dim_thor()
+        threading.Thread(target=worker, daemon=True).start()
 
     def set_stream_options(self, options):
         """Set several stream options at once with a single stream restart"""
@@ -1764,6 +1841,8 @@ class Launcher:
             self.stop()
             return
 
+        self._apply_thor_screens_on_connect()
+
         # Start background threads
         self._create_container_window()
         threading.Thread(target=self._docking_monitor, daemon=True).start()
@@ -1912,6 +1991,13 @@ class Launcher:
                 )
             except Exception:
                 pass
+
+        # Give the Thor its normal brightness back before disconnecting
+        try:
+            if self.config.get("thor_brightness_backup", None):
+                self._restore_thor_brightness()
+        except Exception as e:
+            logger.warning(f"Brightness restore on exit failed: {e}")
 
         # Shut down the bundled adb server so adb.exe doesn't linger in the
         # background and pile up across launches (upstream issue #11)

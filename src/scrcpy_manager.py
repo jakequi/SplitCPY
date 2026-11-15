@@ -260,9 +260,7 @@ class ScrcpyManager:
         self.audio_mode = audio_mode if audio_mode in AUDIO_MODES else "pc"
         self.audio_latency = audio_latency if audio_latency in AUDIO_LATENCY_MODES else "low"
         self.quality = quality if quality in QUALITY_MODES else "high"
-        # Turn the handheld's own screens off while mirroring (both screens on
-        # Android 10-14). They come back on when the stream ends.
-        self.screens_off = bool(screens_off)
+        self.screens_off = bool(screens_off)  # unused: screens are dimmed via settings
         # Visible region of each screen as (left, top, right, bottom) fractions
         # of the full frame. Applied on the PC side (viewport), so changing it
         # never restarts the stream.
@@ -755,11 +753,7 @@ class ScrcpyManager:
             WIRELESS_MAX_SIZE_TOP, profile.extra_scrcpy_args_top,
         )
         top_args = top_args + self.audio_args() + ["--gamepad=uhid"]
-        if self.screens_off:
-            # Without --no-cleanup, scrcpy's on-device cleanup turns the screens
-            # back on however the stream ends (close, crash, Wi-Fi drop)
-            top_args = [a for a in top_args if a not in ("--no-cleanup", "--turn-screen-off")]
-            top_args.append("--turn-screen-off")
+
         self._start_window(
             use_serial,
             profile.top_display_id,

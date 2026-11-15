@@ -17,7 +17,7 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 - **Test Connection & Auto-Set**: measures the handheld-to-PC Wi-Fi (response time, jitter, throughput) and picks the lowest Latency setting that keeps audio clean
 - **Waiting screen instead of a setup dialog**: with no device connected, DualCPY keeps looking and continues by itself the moment the Thor's Wireless debugging comes on (tip: add the Wireless debugging Quick Settings tile) - works after Thor or PC restarts with nothing to type
 - **Easier pairing**: open "Pair device with pairing code" on the Thor and DualCPY fills in the address - just type the 6-digit code
-- **Turn Thor screens off while streaming** (switch or Ctrl+Alt+O); they come back on when the stream ends
+- **Dim Thor screens while streaming** (switch or Ctrl+Alt+O): both panels go to minimum brightness instantly, no restart; your brightness is restored when switched off, on exit, or after a crash on the next connect. (Powering the panels off blacks out the mirror on the Thor, so it isn't used)
 - **(i) buttons**: explanations in the control panel are hidden by default and shown per section
 - **Instant wireless connect**: on start-up a paired handheld is reconnected automatically (finds its current wireless-debugging port on the network, or uses the last address) - no dialog. Quick Connect and Pair now go straight into the streams instead of waiting for you to close the window; if the port changed, the new one is found automatically
 - **Volume slider** (sets the stream's volume in the Windows mixer)
