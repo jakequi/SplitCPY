@@ -1429,7 +1429,9 @@ class Launcher:
     #    keeps working (the --turn-screen-off start flag blacked out the mirror)
     #  - scrcpy can't power the bottom panel off on Android 13 (Alt+O sent to
     #    the bottom stream also switches the top one), so the bottom panel is
-    #    set to minimum brightness via AYN's dual_screen_brightness_level.
+    #    set to minimum brightness instead
+    # (dimmed through DisplayManager.setBrightness for display 4; the
+    # dual_screen_brightness_level setting turned out to be display-only)
     # The bottom brightness is saved first and restored when switched off, on
     # exit, or - after a crash - the next time DualCPY connects. The top panel
     # is restored by scrcpy's on-device cleanup whenever the stream ends.
@@ -1448,29 +1450,58 @@ class Launcher:
             logger.warning(f"adb shell failed ({command[:40]}...): {e}")
             return None
 
+    # IDisplayManager binder transactions (read from the Thor's Android 13
+    # framework): setBrightness(int displayId, float) / getBrightness(int).
+    # The adb shell holds CONTROL_DISPLAY_BRIGHTNESS, so it may call them -
+    # this is exactly what AYN's own brightness slider does for display 4.
+    TX_SET_BRIGHTNESS = 35
+    TX_GET_BRIGHTNESS = 36
+
+    @staticmethod
+    def _parse_parcel_float(out):
+        """'Result: Parcel(00000000 3eb332b3 ...)' -> 0.35 (None if not a float reply)"""
+        import re, struct
+        m = re.search(r"Parcel\(\s*([0-9a-f]{8})\s+([0-9a-f]{8})", out or "")
+        if not m or m.group(1) != "00000000":
+            return None
+        value = struct.unpack("<f", struct.pack("<I", int(m.group(2), 16)))[0]
+        return value if 0.0 <= value <= 1.0 else None
+
+    def _bottom_display_id(self):
+        try:
+            return int(self.scrcpy.profile.bottom_display_id)
+        except Exception:
+            return 4
+
     def _dim_thor(self):
+        """Bottom panel to minimum brightness (the top one is switched off with Alt+O)"""
+        disp = self._bottom_display_id()
         backup = self.config.get("thor_brightness_backup", None)
-        if not backup:
-            out = self._adb_shell("; ".join(f"settings get system {k}" for k in self.BRIGHTNESS_KEYS))
-            if out is None:
+        if not backup or "bottom_brightness" not in backup:
+            current = self._parse_parcel_float(
+                self._adb_shell(f"service call display {self.TX_GET_BRIGHTNESS} i32 {disp}"))
+            if current is None:
+                logger.warning("Couldn't read the bottom screen's brightness - leaving it alone")
                 return False
-            values = [v.strip() for v in out.strip().splitlines()]
-            backup = {k: v for k, v in zip(self.BRIGHTNESS_KEYS, values) if v and v != "null"}
+            backup = dict(backup or {}, display=disp, bottom_brightness=current)
             self.config.set("thor_brightness_backup", backup)
-            logger.info(f"Saved Thor brightness: {backup}")
-        if "dual_screen_brightness_level" not in backup:
-            return True  # not an AYN dual-screen device - top screen only
-        ok = self._adb_shell("settings put system dual_screen_brightness_level 0") is not None
-        logger.info(f"Thor screens dimmed: {ok}")
+            logger.info(f"Saved bottom screen brightness: {backup}")
+        ok = self._adb_shell(f"service call display {self.TX_SET_BRIGHTNESS} i32 {disp} f 0.0") is not None
+        logger.info(f"Bottom screen dimmed: {ok}")
         return ok
 
     def _restore_thor_brightness(self):
         backup = self.config.get("thor_brightness_backup", None)
         if not backup:
             return True
-        restorable = ("screen_brightness_mode", "screen_brightness", "dual_screen_brightness_level")
-        cmds = [f"settings put system {k} {v}" for k, v in backup.items() if k in restorable]
-        ok = self._adb_shell("; ".join(cmds)) is not None
+        cmds = []
+        if "bottom_brightness" in backup:
+            cmds.append(f"service call display {self.TX_SET_BRIGHTNESS} i32 "
+                        f"{int(backup.get('display', 4))} f {float(backup['bottom_brightness']):.6f}")
+        # Older DualCPY Split builds saved settings values instead
+        legacy = ("screen_brightness_mode", "screen_brightness", "dual_screen_brightness_level")
+        cmds += [f"settings put system {k} {v}" for k, v in backup.items() if k in legacy]
+        ok = not cmds or self._adb_shell("; ".join(cmds)) is not None
         if ok:
             cfg = self.config.load()
             cfg.pop("thor_brightness_backup", None)
