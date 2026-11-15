@@ -22,13 +22,13 @@
 ## Download
 
 Grab **`SplitCPY-v1.0.0-windows.zip`** from the
-[latest release](https://github.com/jakequi/DualCPY-Split/releases/latest), unzip it anywhere
+[latest release](https://github.com/jakequi/SplitCPY/releases/latest), unzip it anywhere
 and run **`SplitCPY.exe`**. scrcpy and adb are included - nothing else to install.
 `config/` and `logs/` are created next to the exe on first launch.
 
 ### Run from source
 1. Install Python 3.10-3.13 (tick *"Add python.exe to PATH"*).
-2. `git clone https://github.com/jakequi/DualCPY-Split.git` and `cd DualCPY-Split`
+2. `git clone https://github.com/jakequi/SplitCPY.git` and `cd SplitCPY`
 3. `pip install -r requirements.txt`
 4. `python main.py`
 
@@ -106,7 +106,7 @@ Planned for future versions:
   its own monitor over a true-black background (e.g. top screen on the TV, bottom on the laptop).
   Idea from [AndersonWood's DualCPY fork](https://github.com/AndersonWood/DualCPYerson).
 
-Suggestions and bug reports: [issues](https://github.com/jakequi/DualCPY-Split/issues).
+Suggestions and bug reports: [issues](https://github.com/jakequi/SplitCPY/issues).
 
 ---
 

@@ -1,7 +1,7 @@
 # SplitCPY - dual-screen scrcpy launcher for the AYN Thor and other handhelds
 # Copyright (C) 2026 the_swest (original DualCPY) and SplitCPY contributors
 # Fork of https://github.com/theswest/DualCPY
-# Issues: https://github.com/jakequi/DualCPY-Split/issues
+# Issues: https://github.com/jakequi/SplitCPY/issues
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
