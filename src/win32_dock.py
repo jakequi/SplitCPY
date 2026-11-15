@@ -222,6 +222,67 @@ class Win32Dock:
             if attached:
                 user32.AttachThreadInput(current_thread, target_thread, False)
 
+# Geometry helpers
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", wintypes.RECT),
+        ("rcWork", wintypes.RECT),
+        ("dwFlags", wintypes.DWORD),
+    ]
+
+
+MONITOR_DEFAULTTONEAREST = 2
+
+
+def monitor_work_area(hwnd=None):
+    """
+    (left, top, right, bottom) of the work area (excluding the taskbar) of the
+    monitor the window is on, or the primary monitor if hwnd is None.
+    """
+    try:
+        user32.MonitorFromWindow.restype = wintypes.HANDLE
+        user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_MONITORINFO)]
+        hmon = user32.MonitorFromWindow(hwnd or None, MONITOR_DEFAULTTONEAREST)
+        info = _MONITORINFO()
+        info.cbSize = ctypes.sizeof(_MONITORINFO)
+        if hmon and user32.GetMonitorInfoW(hmon, ctypes.byref(info)):
+            r = info.rcWork
+            return r.left, r.top, r.right, r.bottom
+    except Exception as e:
+        logger.error(f"monitor_work_area failed: {e}")
+    return None
+
+
+def frame_insets(style, ex_style=0):
+    """
+    (left, top, right, bottom) thickness of the window frame/title bar for a
+    window style, i.e. how far the outer rect extends past the client area.
+    """
+    rect = wintypes.RECT(0, 0, 100, 100)
+    user32.AdjustWindowRectEx(ctypes.byref(rect), style & 0xFFFFFFFF, False, ex_style & 0xFFFFFFFF)
+    return -rect.left, -rect.top, rect.right - 100, rect.bottom - 100
+
+
+def set_client_rect(hwnd, x, y, w, h):
+    """
+    Move/resize a top-level window so its CLIENT area sits at screen (x, y)
+    with size w x h (the frame/title bar goes around it).
+    """
+    if not hwnd or not user32.IsWindow(hwnd):
+        return
+    style = user32.GetWindowLongW(hwnd, GWL_STYLE)
+    ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+    il, it, ir, ib = frame_insets(style, ex_style)
+    user32.ShowWindow(hwnd, 9)  # SW_RESTORE in case it was maximised
+    user32.SetWindowPos(
+        hwnd, 0,
+        int(x - il), int(y - it), int(w + il + ir), int(h + it + ib),
+        SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+    )
+
+
 # Window Style Transformers
 def apply_docked_style(hwnd):
     """

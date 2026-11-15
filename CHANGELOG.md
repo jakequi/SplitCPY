@@ -1,5 +1,32 @@
 # Changelog
 
+## DualCPY Split 1.1.0 - 15-11-2026
+
+Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
+
+### Added
+- **Fit to Monitor**: one click makes both screens as large as possible, stacked and centred on the current monitor (works combined and split)
+- **Split Windows**: two fully independent windows you can move, resize and capture separately; positions are remembered across stream restarts
+- **Per-screen aspect crop** (Full / 16:10 / 5:3 / 3:2 / 4:3): crops the black bars so a 4:3 game gets a 4:3 window
+- **Audio output** setting: PC, Device (keep sound on the handheld) or Both (Android 13+)
+- **Audio latency** setting: Auto / Low / Stable
+- Auto-reconnect when a stream drops (up to 3 attempts)
+- Split-mode screenshots (both windows stacked into one image)
+
+### Changed
+- Wi-Fi streams use far less bandwidth (~10 Mbps instead of ~48 Mbps) and a larger audio buffer, fixing audio speeding up / slowing down / pitch warping
+- USB streams at native resolution, so resizing never needs a restart
+- Size slider applies instantly (no restart)
+- Changing FPS / audio / aspect restarts just the streams automatically, not the whole app
+- Reorganised control panel into Screens / Position / Stream / Tools / Presets with short explanations
+- Position values typed in the boxes are no longer clamped
+- On exit, only DualCPY's own scrcpy processes are closed, and the bundled adb server is shut down (no more piled-up adb.exe)
+
+### Bugfixes
+- Status messages disappeared after the first one
+- Running from source crashed on an incorrect `ui_constants` import
+- Wireless-debugging (mDNS) serials weren't recognised as wireless
+
 ## 1.0.0 - 01-06-2026
 
 > Note: **ThorCPY is now known as DualCPY.**

@@ -57,11 +57,47 @@ DEFAULT_RENDER_DRIVER = "direct3d"
 DEFAULT_VIDEO_CODEC = "h264"
 
 # Video bitrate calculation constants
-BITRATE_CALC_SCALE_FACTOR = 2.0
-TOP_BITRATE_MINIMUM = 12
-TOP_BITRATE_SCALE = 24
-BOTTOM_BITRATE_MINIMUM = 6
-BOTTOM_BITRATE_SCALE = 18
+# Bitrate is derived from the *stream* resolution (not the window size),
+# in Mbps per megapixel. Wireless gets a much lower budget: the old values
+# pushed ~48 Mbps over Wi-Fi, which congests the link and makes scrcpy's
+# audio regulator speed up / slow down playback (audible pitch warping).
+BITRATE_MBPS_PER_MP_USB = 10
+BITRATE_MBPS_PER_MP_WIRELESS = 6
+BITRATE_MIN_USB = 8
+BITRATE_MIN_WIRELESS = 3
+# Legacy names kept for callers that still pass them to default_args()
+TOP_BITRATE_MINIMUM = BITRATE_MIN_USB
+TOP_BITRATE_SCALE = BITRATE_MBPS_PER_MP_USB
+BOTTOM_BITRATE_MINIMUM = BITRATE_MIN_USB
+BOTTOM_BITRATE_SCALE = BITRATE_MBPS_PER_MP_USB
+
+# Stream resolution caps (longest edge, px). USB streams at native
+# resolution so the window can be resized live without losing sharpness;
+# wireless is capped to keep bandwidth (and audio) stable.
+WIRELESS_MAX_SIZE_TOP = 1280
+WIRELESS_MAX_SIZE_BOTTOM = 960
+
+# Audio
+AUDIO_MODES = ("pc", "device", "both")
+AUDIO_MODE_LABELS = {"pc": "PC", "device": "Device", "both": "Both"}
+AUDIO_LATENCY_MODES = ("auto", "low", "stable")
+AUDIO_LATENCY_LABELS = {"auto": "Auto", "low": "Low", "stable": "Stable"}
+AUDIO_BUFFER_MS = {
+    # (usb, wireless)
+    "auto": (60, 150),
+    "low": (30, 80),
+    "stable": (120, 250),
+}
+AUDIO_BIT_RATE = "128K"
+
+# Aspect-ratio crop presets: name -> width/height (None = full screen)
+ASPECT_PRESETS = {
+    "Full": None,
+    "16:10": 16 / 10,
+    "5:3": 5 / 3,
+    "3:2": 3 / 2,
+    "4:3": 4 / 3,
+}
 
 # Timing delays for process management
 DISPLAY_INIT_DELAY = 1.2  # Wait for first display to initialize
@@ -84,7 +120,9 @@ class ScrcpyManager:
     """
 
     def __init__(self, profile, scale=None, scrcpy_bin=None,
-                 adb_bin=None, enable_audio_top=True, max_fps=int(DEFAULT_MAX_FPS)):
+                 adb_bin=None, enable_audio_top=True, max_fps=int(DEFAULT_MAX_FPS),
+                 audio_mode="pc", audio_latency="auto",
+                 top_aspect="Full", bottom_aspect="Full"):
         """
         Initialize the scrcpy manager.
         """
@@ -98,19 +136,21 @@ class ScrcpyManager:
         self.max_fps = int(max_fps) if max_fps else int(DEFAULT_MAX_FPS)
         self._scrcpy_log_handles = []
 
+        self.audio_mode = audio_mode if audio_mode in AUDIO_MODES else "pc"
+        self.audio_latency = audio_latency if audio_latency in AUDIO_LATENCY_MODES else "auto"
+        self.top_aspect = top_aspect if top_aspect in ASPECT_PRESETS else "Full"
+        self.bottom_aspect = bottom_aspect if bottom_aspect in ASPECT_PRESETS else "Full"
+
+        # Natural-orientation sizes per display id, filled lazily (for --crop)
+        self._natural_sizes = {}
+
         logger.info(
-            f"Initializing ScrcpyManager (scale={self.scale}, audio={enable_audio_top}, fps={max_fps})"
+            f"Initializing ScrcpyManager (scale={self.scale}, audio={self.audio_mode}/"
+            f"{self.audio_latency}, fps={max_fps}, aspect={self.top_aspect}/{self.bottom_aspect})"
         )
 
-        # Calculate top screen resolution based on scale
-        self.f_w1 = int(profile.top_screen_width * self.scale)
-        self.f_h1 = int(profile.top_screen_height * self.scale)
-        logger.debug(f"Top window resolution: {self.f_w1}x{self.f_h1}")
-
-        # Calculate bottom screen resolution based on scale
-        self.f_w2 = int(self.f_w1 * profile.get_screen_width_ratio())
-        self.f_h2 = int(self.f_w2 * profile.bottom_screen_height / profile.bottom_screen_width)
-        logger.debug(f"Bottom window resolution: {self.f_w2}x{self.f_h2}")
+        self.f_w1 = self.f_h1 = self.f_w2 = self.f_h2 = 0
+        self.set_scale(self.scale)
 
         # Locate scrcpy and adb binaries
         self.scrcpy_bin = scrcpy_bin or resolve_adb("scrcpy")
@@ -131,11 +171,110 @@ class ScrcpyManager:
         self.scrcpy_start_delay = SCRCPY_START_DELAY
         logger.debug(f"Retry count: {self.scrcpy_retry_count}, Start delay: {self.scrcpy_start_delay}s")
 
+    # ------------------------------------------------------------------
+    # Geometry
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _crop_size(width, height, aspect_name):
+        """
+        Return the (w, h) of the centred region of a width x height screen
+        matching the aspect preset. "Full" -> the whole screen.
+        """
+        ratio = ASPECT_PRESETS.get(aspect_name)
+        if not ratio or width <= 0 or height <= 0:
+            return width, height
+        if width / height > ratio:
+            # Screen is wider than the target -> trim the sides
+            return int(round(height * ratio)) // 2 * 2, height
+        # Screen is taller than the target -> trim top/bottom
+        return width, int(round(width / ratio)) // 2 * 2
+
+    def content_sizes(self, scale=1.0):
+        """
+        Window content sizes (w1, h1, w2, h2) for a given scale, keeping the
+        physical size ratio between the screens and applying any aspect crop.
+        Sizes are linear in scale, so callers can solve for a scale that fits.
+        """
+        p = self.profile
+        full_w1 = p.top_screen_width * scale
+        full_w2 = full_w1 * p.get_screen_width_ratio()
+
+        cw1, ch1 = self._crop_size(p.top_screen_width, p.top_screen_height, self.top_aspect)
+        cw2, ch2 = self._crop_size(p.bottom_screen_width, p.bottom_screen_height, self.bottom_aspect)
+
+        w1 = full_w1 * cw1 / p.top_screen_width
+        h1 = w1 * ch1 / cw1
+        w2 = full_w2 * cw2 / p.bottom_screen_width
+        h2 = w2 * ch2 / cw2
+        return w1, h1, w2, h2
+
+    def set_scale(self, scale):
+        """Recompute window sizes for a new scale. Takes effect immediately."""
+        self.scale = scale
+        w1, h1, w2, h2 = self.content_sizes(scale)
+        self.f_w1, self.f_h1 = int(w1), int(h1)
+        self.f_w2, self.f_h2 = int(w2), int(h2)
+        logger.debug(
+            f"Window sizes at scale {scale}: top {self.f_w1}x{self.f_h1}, "
+            f"bottom {self.f_w2}x{self.f_h2}"
+        )
+
+    def _natural_size(self, display_id):
+        """
+        Size of a display in its natural (rotation 0) orientation, from
+        `wm size -d`. scrcpy's --crop is expressed in natural orientation.
+        """
+        if display_id in self._natural_sizes:
+            return self._natural_sizes[display_id]
+        size = None
+        if self.adb_bin and self.serial:
+            try:
+                result = subprocess.run(
+                    [self.adb_bin, "-s", self.serial, "shell", "wm", "size", "-d", str(display_id)],
+                    capture_output=True, text=True, timeout=5,
+                    creationflags=CREATE_NO_WINDOW,
+                )
+                out = result.stdout or ""
+                m = (re.search(r"Override size:\s*(\d+)x(\d+)", out)
+                     or re.search(r"Physical size:\s*(\d+)x(\d+)", out))
+                if m:
+                    size = (int(m.group(1)), int(m.group(2)))
+            except Exception as e:
+                logger.warning(f"Could not read natural size of display {display_id}: {e}")
+        logger.info(f"Natural size of display {display_id}: {size}")
+        self._natural_sizes[display_id] = size
+        return size
+
+    def _crop_arg(self, display_id, width, height, aspect_name):
+        """Build a --crop flag for the aspect preset, or None for full screen."""
+        cw, ch = self._crop_size(width, height, aspect_name)
+        if (cw, ch) == (width, height):
+            return None
+        natural = self._natural_size(display_id)
+        if natural and (natural[0] > natural[1]) != (width > height):
+            # The display is rotated 90 degrees from its natural orientation:
+            # swap the (centred) crop rect into natural coordinates.
+            nw, nh = natural
+            cw, ch = ch, cw
+        else:
+            nw, nh = natural if natural else (width, height)
+        x = max(0, (nw - cw) // 2)
+        y = max(0, (nh - ch) // 2)
+        return f"--crop={cw}:{ch}:{x}:{y}"
+
+    @property
+    def is_wireless(self):
+        return bool(self._is_wireless_serial(self.serial))
+
     def _is_wireless_serial(self, serial):
         """
-        Check if a serial number is a wireless connection (IP:PORT)
+        Check if a serial is a wireless connection: IP:PORT, or an mDNS
+        wireless-debugging name like adb-XXXX._adb-tls-connect._tcp
         """
-        # Wireless connections are in format IP:PORT (e.g., 192.168.1.100:5555)
+        if not serial:
+            return False
+        if "_adb-tls-connect" in serial:
+            return True
         return ':' in serial and re.match(r'\d+\.\d+\.\d+\.\d+:\d+', serial)
 
     def connect_wireless(self, ip_address, port=DEFAULT_WIRELESS_PORT):
@@ -382,9 +521,11 @@ class ScrcpyManager:
         """
         Returns the default editable scrcpy args for a single screen.
         Called by profile dialogs to pre-populate the args textboxes.
+        Audio flags are NOT part of these: audio is controlled from the
+        control panel (Audio output / latency) and added at launch.
         """
         pixels = width * height
-        bitrate_mbps = max(bitrate_min, int(pixels / 1e6 * bitrate_scale * BITRATE_CALC_SCALE_FACTOR))
+        bitrate_mbps = max(bitrate_min, int(round(pixels / 1e6 * bitrate_scale)))
 
         codec_options = (
             "low-latency=1,"
@@ -405,8 +546,57 @@ class ScrcpyManager:
             "--no-power-on",
             "--no-cleanup",
             "--print-fps",
-            "--audio-bit-rate=256K" if enable_audio else "--no-audio",
         ]
+        return args
+
+    def _screen_args(self, display_id, width, height, aspect_name, wireless_cap, custom_args):
+        """
+        Video args for one screen: the profile's custom args if set, otherwise
+        defaults sized for the connection type. Returns (max_size, args).
+        """
+        cw, ch = self._crop_size(width, height, aspect_name)
+        max_size = max(cw, ch)
+        if self.is_wireless:
+            max_size = min(max_size, wireless_cap)
+        factor = max_size / max(cw, ch)
+        stream_w, stream_h = int(cw * factor), int(ch * factor)
+
+        if custom_args:
+            # Audio is managed by the control panel; ignore audio flags here
+            args = [a for a in custom_args if not self._is_audio_arg(a)]
+        elif self.is_wireless:
+            args = self.default_args(stream_w, stream_h, BITRATE_MIN_WIRELESS,
+                                     BITRATE_MBPS_PER_MP_WIRELESS, enable_audio=False)
+        else:
+            args = self.default_args(stream_w, stream_h, BITRATE_MIN_USB,
+                                     BITRATE_MBPS_PER_MP_USB, enable_audio=False)
+
+        crop = self._crop_arg(display_id, width, height, aspect_name)
+        if crop:
+            args = [a for a in args if not a.startswith("--crop")] + [crop]
+        return max_size, list(args)
+
+    @staticmethod
+    def _is_audio_arg(arg):
+        return arg.startswith("--audio") or arg in ("--no-audio", "--no-audio-playback", "--require-audio")
+
+    def audio_args(self):
+        """scrcpy audio flags for the top-screen instance."""
+        if self.audio_mode == "device" or not self.enable_audio_top:
+            # Leave sound on the handheld only
+            return ["--no-audio"]
+        usb_ms, wifi_ms = AUDIO_BUFFER_MS.get(self.audio_latency, AUDIO_BUFFER_MS["auto"])
+        buffer_ms = wifi_ms if self.is_wireless else usb_ms
+        args = [
+            f"--audio-bit-rate={AUDIO_BIT_RATE}",
+            f"--audio-buffer={buffer_ms}",
+            # A slightly larger output buffer avoids Windows audio underruns,
+            # which scrcpy otherwise compensates for by resampling (warping).
+            "--audio-output-buffer=10",
+        ]
+        if self.audio_mode == "both":
+            # Android 13+: capture playback while still playing on the device
+            args += ["--audio-source=playback", "--audio-dup"]
         return args
 
     def _window_titles(self):
@@ -452,17 +642,17 @@ class ScrcpyManager:
 
         # Launch top screen
         logger.info("Starting top screen window")
-        top_args = profile.extra_scrcpy_args_top or self.default_args(
-            self.f_w1, self.f_h1, TOP_BITRATE_MINIMUM, TOP_BITRATE_SCALE,
-            enable_audio=self.enable_audio_top,
+        self.serial = use_serial
+        top_size, top_args = self._screen_args(
+            profile.top_display_id, profile.top_screen_width, profile.top_screen_height,
+            self.top_aspect, WIRELESS_MAX_SIZE_TOP, profile.extra_scrcpy_args_top,
         )
-        top_args = list(top_args) + ["--gamepad=uhid"]
+        top_args = top_args + self.audio_args() + ["--gamepad=uhid"]
         self._start_window(
             use_serial,
             profile.top_display_id,
             top_title,
-            self.f_w1,
-            self.f_h1,
+            top_size,
             extra_args=top_args,
             max_fps_override=self.max_fps,
         )
@@ -485,17 +675,16 @@ class ScrcpyManager:
 
         # Launch bottom screen
         logger.info("Starting bottom screen window")
-        bottom_args = profile.extra_scrcpy_args_bottom or self.default_args(
-            self.f_w2, self.f_h2, BOTTOM_BITRATE_MINIMUM, BOTTOM_BITRATE_SCALE,
-            enable_audio=False,
+        bottom_size, bottom_args = self._screen_args(
+            profile.bottom_display_id, profile.bottom_screen_width, profile.bottom_screen_height,
+            self.bottom_aspect, WIRELESS_MAX_SIZE_BOTTOM, profile.extra_scrcpy_args_bottom,
         )
-        bottom_args = list(bottom_args) + ["--gamepad=disabled"]
+        bottom_args = bottom_args + ["--no-audio", "--gamepad=disabled"]
         self._start_window(
             use_serial,
             profile.bottom_display_id,
             bottom_title,
-            self.f_w2,
-            self.f_h2,
+            bottom_size,
             extra_args=bottom_args,
         )
 
@@ -507,8 +696,7 @@ class ScrcpyManager:
             serial,
             display_id,
             window_title,
-            width,
-            height,
+            max_size,
             extra_args: list = None,
             max_fps_override=None,
     ):
@@ -526,7 +714,7 @@ class ScrcpyManager:
             "--serial",       serial,
             "--display-id",   display_id,
             "--window-title", window_title,
-            "--max-size",     f"{width}",
+            "--max-size",     f"{int(max_size)}",
             "--max-fps",      str(max_fps_override if max_fps_override is not None else self.max_fps),
             *(extra_args or []),
         ]

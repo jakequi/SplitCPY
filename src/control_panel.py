@@ -44,10 +44,11 @@ from src.device_profile_editor import DeviceProfileEditorDialog
 logger = logging.getLogger(__name__)
 
 # Slider range constraints
-SCREEN_MIN_POS = -500
-SCREEN_MAX_POS = 1500
-GLOBAL_SCALE_MIN = 0.3
-GLOBAL_SCALE_MAX = 2.5
+# Slider range only; typed values are not clamped (upstream issue #19)
+SCREEN_MIN_POS = -2000
+SCREEN_MAX_POS = 4000
+GLOBAL_SCALE_MIN = 0.1
+GLOBAL_SCALE_MAX = 3.0
 
 # Timing
 STATUS_MESSAGE_DURATION = 2.0
@@ -255,8 +256,55 @@ class CTkUI:
         logger.info("Control UI initialisation finished")
 
     # UI construction
+    def _button(self, parent, text, command, accent=False, **kw):
+        """Consistently styled button"""
+        if accent:
+            return ctk.CTkButton(
+                parent, text=text, command=command,
+                fg_color=ACCENT_COLOUR, hover_color=ACCENT2_COLOUR,
+                text_color="#ffffff", font=make_font(13, "bold"), **kw,
+            )
+        return ctk.CTkButton(
+            parent, text=text, command=command,
+            fg_color=PANEL_COLOUR, hover_color=BORDER_COLOUR,
+            border_color=BORDER_COLOUR, border_width=1,
+            text_color=TEXT_COLOUR, font=make_font(13), **kw,
+        )
+
+    def _dropdown(self, parent, label, values, current, command):
+        """Labelled option menu row; returns the StringVar"""
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=16, pady=3)
+        row.columnconfigure(1, weight=1)
+        ctk.CTkLabel(row, text=label, font=make_font(13), text_color=TEXT_COLOUR,
+                     width=110, anchor="w").grid(row=0, column=0, sticky="w")
+        var = tk.StringVar(value=current)
+        ctk.CTkOptionMenu(
+            row, variable=var, values=list(values), command=command,
+            fg_color=PANEL_COLOUR, button_color=BORDER_COLOUR,
+            button_hover_color=ACCENT_COLOUR, text_color=TEXT_COLOUR,
+            dropdown_fg_color=PANEL_COLOUR, dropdown_hover_color=BORDER_COLOUR,
+            dropdown_text_color=TEXT_COLOUR,
+            font=make_font(13), dropdown_font=make_font(13),
+        ).grid(row=0, column=1, sticky="ew", padx=(10, 0))
+        return var
+
+    def _hint(self, text):
+        lbl = ctk.CTkLabel(self._scroll, text=text, font=make_font(11),
+                           text_color="#7d8494",
+                           anchor="w", justify="left", wraplength=380)
+        lbl.pack(anchor="w", padx=16, pady=(0, 4))
+        return lbl
+
     def _build_ui(self):
         """Make all widgets inside a frame"""
+        from src.launcher import ALLOWED_FPS_VALUES
+        from src.scrcpy_manager import (
+            ASPECT_PRESETS, AUDIO_MODES, AUDIO_MODE_LABELS,
+            AUDIO_LATENCY_MODES, AUDIO_LATENCY_LABELS,
+        )
+        self._audio_label_to_key = {AUDIO_MODE_LABELS[k]: k for k in AUDIO_MODES}
+        self._latency_label_to_key = {AUDIO_LATENCY_LABELS[k]: k for k in AUDIO_LATENCY_MODES}
 
         # The scrollable frame fills the entire window and responds to resizing
         self._scroll = ctk.CTkScrollableFrame(
@@ -270,7 +318,7 @@ class CTkUI:
 
         # Title bar
         title_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        title_row.pack(fill="x", padx=16, pady=(18, 6))
+        title_row.pack(fill="x", padx=16, pady=(18, 2))
 
         try:
             pil_img = Image.open(ICON_PATH).resize((36, 36))
@@ -281,31 +329,66 @@ class CTkUI:
 
         ctk.CTkLabel(
             title_row,
-            text="DualCPY Control Panel",
+            text="DualCPY Split",
             font=make_font(22, "bold"),
             text_color=TEXT_COLOUR,
         ).pack(side="left", padx=10)
 
+        # Active profile + connection type
+        self._current_profile_label = ctk.CTkLabel(
+            self._scroll, text="", font=make_font(12),
+            text_color=SUCCESS_COLOUR, anchor="w",
+        )
+        self._current_profile_label.pack(anchor="w", padx=16)
+        self._refresh_profile_label()
+
+        # Status line (always present so messages never get lost)
+        self._status_label = ctk.CTkLabel(
+            self._scroll, text=" ", font=make_font(12),
+            text_color=TEXT_COLOUR, anchor="w",
+        )
+        self._status_label.pack(anchor="w", padx=16, pady=(2, 0))
+
+        # -------------------------------------------------------- Screens
         self._separator()
+        self._section("Screens")
 
-        self._section("Screen Layout")
+        row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        row.pack(fill="x", padx=16, pady=(4, 4))
+        row.columnconfigure(0, weight=1)
+        row.columnconfigure(1, weight=1)
+        self._button(row, "Fit to Monitor", self._on_fit_to_monitor, accent=True) \
+            .grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self._dock_btn_text = tk.StringVar(value=self._dock_label())
+        self._dock_btn = ctk.CTkButton(
+            row, textvariable=self._dock_btn_text, command=self._on_dock_toggle,
+            fg_color=PANEL_COLOUR, hover_color=BORDER_COLOUR,
+            border_color=BORDER_COLOUR, border_width=1,
+            text_color=TEXT_COLOUR, font=make_font(13),
+        )
+        self._dock_btn.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self._hint("Fit to Monitor: biggest possible, stacked and centred on the current monitor.\n"
+                   "Split Windows: two separate windows you can move, resize and capture individually.")
 
-        # Global scale slider
         safe_scale = self.l.global_scale if self.l.global_scale is not None else 0.6
-        self._build_slider("global_scale", "Global Scale",
+        self._build_slider("global_scale", "Size",
                            safe_scale, GLOBAL_SCALE_MIN, GLOBAL_SCALE_MAX,
                            color=ACCENT_COLOUR, is_float=True,
                            on_change=self._on_scale_change)
 
-        # Scale restart text, hidden by default until used
-        self._scale_notice = ctk.CTkLabel(
-            self._scroll, text="",
-            text_color=WARNING_COLOUR,
-            font=make_font(11),
-        )
-        self._scale_notice.pack(anchor="w", padx=44, pady=(0, 2))
+        aspects = list(ASPECT_PRESETS.keys())
+        self._top_aspect_var = self._dropdown(
+            self._scroll, "Top aspect", aspects, self.l.top_aspect,
+            lambda v: self._on_stream_option("top_aspect", v))
+        self._bottom_aspect_var = self._dropdown(
+            self._scroll, "Bottom aspect", aspects, self.l.bottom_aspect,
+            lambda v: self._on_stream_option("bottom_aspect", v))
+        self._hint("Pick 4:3 (etc.) to crop the black bars when a game doesn't fill the screen - "
+                   "the window then takes the game's shape.")
 
-        # Sliders; top x, top y, bottom x and bottom y
+        # -------------------------------------------------------- Position
+        self._separator()
+        self._section("Position (combined window)")
         for attr, label, color in [
             ("tx", "Top X", TOP_COLOUR),
             ("ty", "Top Y", TOP_COLOUR),
@@ -316,167 +399,52 @@ class CTkUI:
             self._build_slider(attr, label, val,
                                SCREEN_MIN_POS, SCREEN_MAX_POS,
                                color=color, is_float=False,
-                               on_change=self._on_layout_change)
+                               on_change=self._on_layout_change,
+                               clamp_entry=False)
+        self._split_note = self._hint("")
+        self._button(self._scroll, "Reset Layout", self._on_default_layout) \
+            .pack(fill="x", padx=16, pady=(4, 0))
 
-        # Default layout button
-        ctk.CTkButton(
-            self._scroll,
-            text="Reset to Default Position",
-            command=self._on_default_layout,
-            fg_color=PANEL_COLOUR,
-            hover_color=BORDER_COLOUR,
-            border_color=BORDER_COLOUR,
-            border_width=1,
-            text_color=TEXT_COLOUR,
-            font=make_font(13),
-        ).pack(fill="x", padx=16, pady=(4, 0))
-
+        # -------------------------------------------------------- Stream
         self._separator()
+        self._section("Stream")
+        self._fps_var = self._dropdown(
+            self._scroll, "Frame rate", [f"{v} FPS" for v in ALLOWED_FPS_VALUES],
+            f"{self.l.max_fps} FPS", self._on_fps_change)
+        self._audio_var = self._dropdown(
+            self._scroll, "Audio output", [AUDIO_MODE_LABELS[k] for k in AUDIO_MODES],
+            AUDIO_MODE_LABELS.get(self.l.audio_mode, "PC"),
+            lambda v: self._on_stream_option("audio_mode", self._audio_label_to_key[v]))
+        self._latency_var = self._dropdown(
+            self._scroll, "Audio latency", [AUDIO_LATENCY_LABELS[k] for k in AUDIO_LATENCY_MODES],
+            AUDIO_LATENCY_LABELS.get(self.l.audio_latency, "Auto"),
+            lambda v: self._on_stream_option("audio_latency", self._latency_label_to_key[v]))
+        self._hint("Audio output - PC: sound on the PC only. Device: sound stays on the handheld. "
+                   "Both: PC and handheld (Android 13+).\n"
+                   "Audio latency - if sound warps or crackles (common on Wi-Fi), choose Stable.\n"
+                   "Changes here restart the streams automatically.")
+        self._button(self._scroll, "Restart Streams", self._on_restart) \
+            .pack(fill="x", padx=16, pady=(4, 0))
 
-        self._section("Window Config")
+        # -------------------------------------------------------- Tools
+        self._separator()
+        self._section("Tools")
+        grid = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        grid.pack(fill="x", padx=16, pady=(4, 4))
+        grid.columnconfigure(0, weight=1)
+        grid.columnconfigure(1, weight=1)
+        self._button(grid, "Screenshot", self.take_screenshot) \
+            .grid(row=0, column=0, sticky="ew", padx=(0, 4), pady=4)
+        self._button(grid, "File Transfer", self._on_file_transfer) \
+            .grid(row=0, column=1, sticky="ew", padx=(4, 0), pady=4)
+        self._button(grid, "Wireless", self._on_wireless) \
+            .grid(row=1, column=0, sticky="ew", padx=(0, 4), pady=4)
+        self._button(grid, "Device Profiles", self._on_edit_profiles) \
+            .grid(row=1, column=1, sticky="ew", padx=(4, 0), pady=4)
 
-        btn_grid = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        # No bottom frame-padding: bottom_btn_row sits flush below so the gap to
-        # it matches the 8px gap between rows inside this grid (otherwise the
-        # two frames' pady stack and double it).
-        btn_grid.pack(fill="x", padx=16, pady=(4, 0))
-        btn_grid.columnconfigure(0, weight=1)
-        btn_grid.columnconfigure(1, weight=1)
-
-        # FPS selector
-        from src.launcher import ALLOWED_FPS_VALUES
-        self._fps_var = tk.StringVar(value=f"{self.l.max_fps} FPS")
-        ctk.CTkOptionMenu(
-            btn_grid,
-            variable=self._fps_var,
-            values=[f"{v} FPS" for v in ALLOWED_FPS_VALUES],
-            command=self._on_fps_change,
-            fg_color=PANEL_COLOUR,
-            button_color=BORDER_COLOUR,
-            button_hover_color=ACCENT_COLOUR,
-            text_color=TEXT_COLOUR,
-            dropdown_fg_color=PANEL_COLOUR,
-            dropdown_hover_color=BORDER_COLOUR,
-            dropdown_text_color=TEXT_COLOUR,
-            font=make_font(13),
-            dropdown_font=make_font(13),
-        ).grid(row=0, column=0, sticky="ew", padx=(0, 4), pady=4)
-
-        # Restart Button
-        ctk.CTkButton(
-            btn_grid,
-            text="Restart",
-            command=self._on_restart,
-            fg_color=PANEL_COLOUR,
-            hover_color=BORDER_COLOUR,
-            border_color=BORDER_COLOUR,
-            border_width=1,
-            text_color=TEXT_COLOUR,
-            font=make_font(13),
-        ).grid(row=0, column=1, sticky="ew", padx=(4, 0), pady=4)
-
-        # Dock/Undock button
-        self._dock_btn_text = tk.StringVar(
-            value="Undock" if self.l.docked else "Dock"
-        )
-        self._dock_btn = ctk.CTkButton(
-            btn_grid,
-            textvariable=self._dock_btn_text,
-            command=self._on_dock_toggle,
-            fg_color=PANEL_COLOUR,
-            hover_color=BORDER_COLOUR,
-            border_color=BORDER_COLOUR,
-            border_width=1,
-            text_color=TEXT_COLOUR,
-            font=make_font(13),
-        )
-        self._dock_btn.grid(row=1, column=0, sticky="ew", padx=(0, 4), pady=4)
-
-        # Screenshot Button
-        ctk.CTkButton(
-            btn_grid,
-            text="Screenshot",
-            command=self.take_screenshot,
-            fg_color=PANEL_COLOUR,
-            hover_color=BORDER_COLOUR,
-            border_color=BORDER_COLOUR,
-            border_width=1,
-            text_color=TEXT_COLOUR,
-            font=make_font(13),
-        ).grid(row=1, column=1, sticky="ew", padx=(4, 0), pady=4)
-
-        # Wireless + Edit Device Profiles row
-        bottom_btn_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        # Flush against btn_grid above (see note there); keep bottom padding.
-        bottom_btn_row.pack(fill="x", padx=16, pady=(0, 4))
-        bottom_btn_row.columnconfigure(0, weight=1)
-        bottom_btn_row.columnconfigure(1, weight=1)
-
-        ctk.CTkButton(
-            bottom_btn_row,
-            text="Wireless",
-            command=self._on_wireless,
-            fg_color=PANEL_COLOUR,
-            hover_color=BORDER_COLOUR,
-            border_color=BORDER_COLOUR,
-            border_width=1,
-            text_color=TEXT_COLOUR,
-            font=make_font(13),
-        ).grid(row=0, column=0, sticky="ew", padx=(0, 4), pady=4)
-
-        ctk.CTkButton(
-            bottom_btn_row,
-            text="Edit Device Profiles",
-            command=self._on_edit_profiles,
-            fg_color=PANEL_COLOUR,
-            hover_color=BORDER_COLOUR,
-            border_color=BORDER_COLOUR,
-            border_width=1,
-            text_color=TEXT_COLOUR,
-            font=make_font(13),
-        ).grid(row=0, column=1, sticky="ew", padx=(4, 0), pady=4)
-
-        # File Transfer button (full width, row 1)
-        ctk.CTkButton(
-            bottom_btn_row,
-            text="File Transfer",
-            command=self._on_file_transfer,
-            fg_color=PANEL_COLOUR,
-            hover_color=BORDER_COLOUR,
-            border_color=BORDER_COLOUR,
-            border_width=1,
-            text_color=TEXT_COLOUR,
-            font=make_font(13),
-        ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=4)
-
-        # Determine the display name of the initial loaded profile
-        current_prof = self.l.scrcpy.profile
-        display_name = current_prof.nickname.strip() if getattr(current_prof, "nickname", "") else current_prof.name
-
-        # Create and pack the indicator label
-        self._current_profile_label = ctk.CTkLabel(
-            self.window,
-            text=f"Active Profile: {display_name}",
-            font=make_font(14, "bold"),
-            text_color="#1a6b3a"
-        )
-        self._current_profile_label.pack(pady=(10, 5))
-
-        # FPS restart warning / status label
-        self._status_label = ctk.CTkLabel(
-            self._scroll,
-            text="",
-            font=make_font(12),
-            text_color=TEXT_COLOUR,
-        )
-
-        self._status_label.pack(pady=(2, 2))
-
-        ctk.CTkFrame(
-            self._scroll, height=1, fg_color=BORDER_COLOUR
-        ).pack(fill="x", padx=16, pady=4)
-
-        self._section("Presets")
+        # -------------------------------------------------------- Presets
+        self._separator()
+        self._section("Layout Presets")
 
         save_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
         save_row.pack(fill="x", padx=16, pady=4)
@@ -499,28 +467,42 @@ class CTkUI:
             width=80,
             command=self._on_save_preset,
             fg_color=ACCENT_COLOUR,
-            hover_color="#3a7fc1",
+            hover_color=ACCENT2_COLOUR,
             font=make_font(13),
         ).grid(row=0, column=1)
-
-        ctk.CTkLabel(
-            self._scroll,
-            text="Saved Presets",
-            font=make_font(13, "bold"),
-            text_color=TEXT_COLOUR,
-            anchor="w",
-        ).pack(anchor="w", padx=16, pady=(10, 2))
 
         self._preset_list_frame = ctk.CTkScrollableFrame(
             self._scroll,
             fg_color=PANEL_COLOUR,
-            height=180,
+            height=150,
             scrollbar_button_color=BORDER_COLOUR,
         )
-        self._preset_list_frame.pack(fill="x", padx=16, pady=(0, 20))
+        self._preset_list_frame.pack(fill="x", padx=16, pady=(6, 20))
         self._preset_list_frame.columnconfigure(0, weight=1)
 
         self.refresh_preset_list()
+        self._refresh_split_state()
+
+    def _dock_label(self):
+        return "Split Windows" if self.l.docked else "Combine Windows"
+
+    def _refresh_profile_label(self):
+        try:
+            prof = self.l.scrcpy.profile
+            name = prof.nickname.strip() if getattr(prof, "nickname", "") else prof.name
+            conn = "Wi-Fi" if self.l.scrcpy.is_wireless else "USB"
+            self._current_profile_label.configure(text=f"{name}  \u2022  {conn}")
+        except Exception:
+            pass
+
+    def _refresh_split_state(self):
+        """Explain that the position sliders only apply to the combined window"""
+        if self.l.docked:
+            self._split_note.configure(text="")
+        else:
+            self._split_note.configure(
+                text="Split mode: drag the windows wherever you like. "
+                     "These sliders apply when combined.")
 
     # Layout helpers
     def _separator(self):
@@ -539,7 +521,7 @@ class CTkUI:
 
     def _build_slider(
         self, attr, label, initial_val,
-        min_val, max_val, *, color, is_float, on_change
+        min_val, max_val, *, color, is_float, on_change, clamp_entry=True
     ):
         """
         Build one labeled slider row (label | slider | entry) that is
@@ -573,7 +555,7 @@ class CTkUI:
             real_var  = tk.IntVar(value=int(initial_val))
             entry_str = str(int(initial_val))
 
-        norm_var  = tk.DoubleVar(value=to_norm(initial_val))
+        norm_var  = tk.DoubleVar(value=max(0.0, min(1.0, to_norm(initial_val))))
         entry_var = tk.StringVar(value=entry_str)
 
         # Slider
@@ -620,10 +602,11 @@ class CTkUI:
                     entry_var.set(f"{new_val:.2f}")
                 else:
                     new_val = int(float(raw))
-                    new_val = max(min_val, min(max_val, new_val))
+                    if clamp_entry:
+                        new_val = max(min_val, min(max_val, new_val))
                     real_var.set(new_val)
                     entry_var.set(str(new_val))
-                norm_var.set(to_norm(new_val))
+                norm_var.set(max(0.0, min(1.0, to_norm(new_val))))
                 on_change()
             except ValueError:
                 self.show_status("Invalid number", "error")
@@ -641,7 +624,7 @@ class CTkUI:
             "real": real_var,
             "norm": norm_var,
             "entry": entry_var,
-            "to_norm": to_norm,
+            "to_norm": lambda v: max(0.0, min(1.0, to_norm(v))),
             "is_float": is_float,
         }
 
@@ -651,16 +634,20 @@ class CTkUI:
         if ref is None:
             return
         new_scale = round(float(ref["real"].get()), 2)
-        changed = abs(new_scale - self._original_scale) > SCALE_CHANGE_THRESHOLD
-        self.l.global_scale = new_scale
-        self.l.save_scale()
-        if changed:
-            self._scale_notice.configure(
-                text="Restart required to apply scale change"
-            )
-            self._scale_changed = True
-        else:
-            self._scale_notice.configure(text="")
+        if new_scale <= 0 or abs(new_scale - (self.l.global_scale or 0)) < 0.005:
+            return
+        # Applies instantly - no restart needed any more
+        self.l.set_scale_live(new_scale, keep_positions=True)
+        self._sync_sliders_from_launcher(skip=("global_scale",))
+
+    def _on_fit_to_monitor(self):
+        scale = self.l.fit_to_monitor()
+        if scale is None:
+            self.show_status("Could not read the monitor size", "error")
+            return
+        self._sync_sliders_from_launcher()
+        self.force_window_sync()
+        self.show_status("Fitted to monitor", "success")
 
     def _on_default_layout(self):
         """Reset tx/ty/bx/by to the profile's centred default and sync everything"""
@@ -668,9 +655,10 @@ class CTkUI:
         for attr, val in defaults.items():
             self.l.__dict__[attr] = val
         self.l.save_layout()
+        self.l._resize_container_window()
         self._sync_sliders_from_launcher()
         self.force_window_sync()
-        self.show_status("Position reset to default", "success")
+        self.show_status("Layout reset", "success")
 
     def _on_layout_change(self):
         for attr in ("tx", "ty", "bx", "by"):
@@ -678,29 +666,37 @@ class CTkUI:
             if ref:
                 setattr(self.l, attr, int(ref["real"].get()))
         self.l.save_layout()
+        self.l._resize_container_window()
         self.force_window_sync()
 
     def _on_fps_change(self, value):
         try:
             fps = int(value.split()[0])
-            if hasattr(self.l, "set_max_fps"):
-                self.l.set_max_fps(fps)
-            self.show_status(f"FPS set to {fps} - click Restart to apply", "info")
+            if fps == self.l.max_fps:
+                return
+            self.l.set_max_fps(fps)
+            self.show_status(f"Frame rate {fps} FPS - restarting streams...", "info")
+            self.l.restart_streams()
         except Exception as e:
             logger.error(f"FPS change error: {e}")
 
+    def _on_stream_option(self, key, value):
+        if getattr(self.l, key, None) == value:
+            return
+        self.show_status("Applying - restarting streams...", "info")
+        self.l.set_stream_option(key, value)
+
     def _on_restart(self):
-        if hasattr(self.l, "restart_app"):
-            self._scale_changed = False
-            self._original_scale = self.l.global_scale
-            self._scale_notice.configure(text="")
-            self.show_status("Restarting...", "info")
-            self.l.restart_app()
+        self.show_status("Restarting streams...", "info")
+        self.l.restart_streams()
 
     def _on_dock_toggle(self):
         if hasattr(self.l, "toggle_dock"):
             self.l.toggle_dock()
-            self._dock_btn_text.set("Undock" if self.l.docked else "Dock")
+            self._dock_btn_text.set(self._dock_label())
+            self._refresh_split_state()
+            if not self.l.docked:
+                self.show_status("Split: move/resize each window freely", "success")
 
     def _on_wireless(self):
         """Hide CTK window, open wireless dialog, restore window."""
@@ -783,10 +779,13 @@ class CTkUI:
         self.l.bx = data.get("bx", self.l.bx)
         self.l.by = data.get("by", self.l.by)
         if "global_scale" in data:
-            self.l.global_scale = data["global_scale"]
-            self.l.launch_scale = data["global_scale"]
-            self.l.save_scale()
+            self.l.set_scale_live(float(data["global_scale"]), keep_positions=False)
+            self.l.tx = data.get("tx", self.l.tx)
+            self.l.ty = data.get("ty", self.l.ty)
+            self.l.bx = data.get("bx", self.l.bx)
+            self.l.by = data.get("by", self.l.by)
         self.l.save_layout()
+        self.l._resize_container_window()
         self._sync_sliders_from_launcher()
         self.force_window_sync()
         self.show_status(f"Loaded preset: {name}", "success")
@@ -893,10 +892,11 @@ class CTkUI:
             except Exception:
                 pass
 
-        # Hide the status label once the timer expires
+        # Clear the text once the timer expires (keep the widget packed so the
+        # next message is still visible - previously it was pack_forget()-ed
+        # and every later status message silently disappeared)
         def _clear_status():
-            self._status_label.configure(text="")
-            self._status_label.pack_forget()
+            self._status_label.configure(text=" ")
 
         self._status_after_id = self.window.after(
             int(duration * 1000),
@@ -938,6 +938,31 @@ class CTkUI:
         except Exception as e:
             logger.error(f"Force window sync error: {e}", exc_info=True)
 
+    def _grab_client(self, hwnd):
+        """Capture one window's client area as a PIL image (or None)"""
+        if not hwnd:
+            return None
+        try:
+            user32 = ctypes.windll.user32
+            rc = wintypes.RECT()
+            user32.GetClientRect(hwnd, ctypes.byref(rc))
+            pt = wintypes.POINT(0, 0)
+            user32.ClientToScreen(hwnd, ctypes.byref(pt))
+            region = (pt.x, pt.y, pt.x + rc.right, pt.y + rc.bottom)
+            frame = None
+            # dxcam returns None when nothing changed since the last grab
+            for _ in range(20):
+                frame = self._dxcam.grab(region=region)
+                if frame is not None:
+                    break
+                time.sleep(0.02)
+            if frame is None:
+                return None
+            return Image.fromarray(frame[:, :, [2, 1, 0]])
+        except Exception as e:
+            logger.warning(f"Window capture failed: {e}")
+            return None
+
     def take_screenshot(self):
         try:
             user32 = ctypes.windll.user32
@@ -965,13 +990,27 @@ class CTkUI:
                 f"{left}, {top}, {right}, {bottom}"
             )
 
-            frame = self._dxcam.grab(region=(left, top, right, bottom))
+            if self.l.docked:
+                img = self._grab_client(self.l.hwnd_container)
+                if img is None:
+                    logger.error("dxcam returned no frame")
+                    self.show_status("Screenshot failed - is the window on the main monitor?", "error")
+                    return
+            else:
+                # Split mode: capture each window and stack them like the
+                # combined layout (top centred over bottom)
+                shots = [self._grab_client(h) for h in (self.l.dock.hwnd_top, self.l.dock.hwnd_bottom)]
+                shots = [s for s in shots if s is not None]
+                if not shots:
+                    self.show_status("Screenshot failed - are both windows on screen?", "error")
+                    return
+                width = max(s.width for s in shots)
+                img = Image.new("RGB", (width, sum(s.height for s in shots)), (0, 0, 0))
+                y = 0
+                for s in shots:
+                    img.paste(s, ((width - s.width) // 2, y))
+                    y += s.height
 
-            if frame is None:
-                logger.error("dxcam returned no frame")
-                return
-
-            img = Image.fromarray(frame[:, :, [2, 1, 0]])
             output = BytesIO()
             img.convert("RGB").save(output, "BMP")
             data = output.getvalue()[14:]
@@ -1007,15 +1046,13 @@ class CTkUI:
             )
 
     # Internal helpers
-    def _sync_sliders_from_launcher(self):
+    def _sync_sliders_from_launcher(self, skip=()):
         """
         Push current launcher state back into all slider widgets
         """
         # Keep the active-profile label in sync after a hot-swap
         if hasattr(self, "_current_profile_label") and self.l.scrcpy:
-            prof = self.l.scrcpy.profile
-            display_name = prof.nickname.strip() if getattr(prof, "nickname", "") else prof.name
-            self._current_profile_label.configure(text=f"Active Profile: {display_name}")
+            self._refresh_profile_label()
 
         updates = {
             "global_scale": self.l.global_scale,
@@ -1025,6 +1062,8 @@ class CTkUI:
             "by": self.l.by,
         }
         for key, new_val in updates.items():
+            if key in skip:
+                continue
             ref = self._slider_refs.get(key)
             if ref is None or new_val is None:
                 continue
@@ -1039,20 +1078,23 @@ class CTkUI:
                 ref["entry"].set(str(v))
             ref["norm"].set(ref["to_norm"](v))
 
-        # Also update scale-change notice
-        scale = self.l.global_scale or 0.6
-        changed = abs(scale - self._original_scale) > SCALE_CHANGE_THRESHOLD
-        self._scale_notice.configure(
-            text="Restart required to apply scale change" if changed else ""
-        )
+        # Keep stream option dropdowns in sync too
+        try:
+            self._top_aspect_var.set(self.l.top_aspect)
+            self._bottom_aspect_var.set(self.l.bottom_aspect)
+            self._fps_var.set(f"{self.l.max_fps} FPS")
+        except Exception:
+            pass
 
     def _update_loop(self):
         try:
             if not self.l.running:
                 return
 
-            # Sync scrcpy window positions
-            if self.l.dock.hwnd_top or self.l.dock.hwnd_bottom:
+            # Sync scrcpy window positions (combined mode only - in split
+            # mode the user owns the window positions)
+            if self.l.docked and not self.l._restarting and (
+                    self.l.dock.hwnd_top or self.l.dock.hwnd_bottom):
                 self.l.dock.sync(
                     self.l.tx, self.l.ty,
                     self.l.bx, self.l.by,
@@ -1062,7 +1104,7 @@ class CTkUI:
                 )
 
             # Keep dock button label in sync with actual state
-            expected = "Undock" if self.l.docked else "Dock"
+            expected = self._dock_label()
             if self._dock_btn_text.get() != expected:
                 self._dock_btn_text.set(expected)
 

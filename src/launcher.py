@@ -39,9 +39,12 @@ from src.device_selector import show_device_selector
 from src.custom_profile_store import CustomProfileStore
 from src.control_panel import show_loading_screen, CTkUI
 from src.device_profile_editor import DeviceProfileEditorDialog
-from src.win32_dock import Win32Dock, apply_docked_style, apply_undocked_style
+from src.win32_dock import (
+    Win32Dock, apply_docked_style, apply_undocked_style,
+    monitor_work_area, frame_insets, set_client_rect,
+)
 from src.device_detection import detect_device, resolve_adb, get_device_info, get_display_list
-from ui_constants import resource_path
+from src.ui_constants import resource_path
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +124,18 @@ class Launcher:
         except (TypeError, ValueError):
             cfg_fps = DEFAULT_MAX_FPS
         self.max_fps = cfg_fps if cfg_fps in ALLOWED_FPS_VALUES else DEFAULT_MAX_FPS
+
+        # Stream options (applied by restarting the streams)
+        self.audio_mode = self.config.get("audio_mode", "pc")
+        self.audio_latency = self.config.get("audio_latency", "auto")
+        self.top_aspect = self.config.get("top_aspect", "Full")
+        self.bottom_aspect = self.config.get("bottom_aspect", "Full")
+
+        # Stream restart / auto-reconnect state
+        self._restarting = False
+        self._reconnect_attempts = 0
+        self._last_reconnect = 0.0
+        self._split_rects = None
 
         # Layout attributes
         self.scrcpy = None
@@ -202,6 +217,28 @@ class Launcher:
         except Exception as e:
             logger.error(f"Failed to save device scale: {e}")
 
+    def _make_manager(self, profile, scale):
+        """Create a ScrcpyManager with all current stream options applied"""
+        return ScrcpyManager(
+            profile=profile,
+            scale=scale,
+            max_fps=self.max_fps,
+            audio_mode=self.audio_mode,
+            audio_latency=self.audio_latency,
+            top_aspect=self.top_aspect,
+            bottom_aspect=self.bottom_aspect,
+        )
+
+    def _apply_default_layout(self):
+        layout = self.get_default_layout()
+        self.tx, self.ty, self.bx, self.by = layout["tx"], layout["ty"], layout["bx"], layout["by"]
+
+    def _container_client_size(self):
+        """Client size that fits both screens at their current positions"""
+        right = max(self.tx + self.scrcpy.f_w1, self.bx + self.scrcpy.f_w2)
+        bottom = max(self.ty + self.scrcpy.f_h1, self.by + self.scrcpy.f_h2)
+        return max(1, int(right)), max(1, int(bottom))
+
     def get_default_layout(self):
         """
         Return the centred default layout dictionary for the current profile/scale
@@ -280,6 +317,9 @@ class Launcher:
             if msg in (WM_CLOSE, WM_DESTROY):
                 self.stop()
                 return 0
+
+            if self.scrcpy is None or self.tx is None:
+                return self.user32.DefWindowProcW(hwnd, msg, wp, lp)
 
             # Handle activation when the mouse enters/clicks the container
             if msg == WM_MOUSEACTIVATE:
@@ -505,8 +545,7 @@ class Launcher:
             self.user32.RegisterClassExW(ctypes.byref(wc))
 
             # Calculate container size to fit both stacked windows
-            client_w = max(self.scrcpy.f_w1, self.scrcpy.f_w2 + abs(self.bx))
-            client_h = self.scrcpy.f_h1 + self.scrcpy.f_h2
+            client_w, client_h = self._container_client_size()
 
             # Adjustments for window decorations
             rect = wintypes.RECT(0, 0, int(client_w), int(client_h))
@@ -564,7 +603,7 @@ class Launcher:
         """
         while self.running:
             with self.dock_lock:
-                if self.hwnd_container and self.docked:
+                if self.hwnd_container and self.docked and not self._restarting:
                     # Find scrcpy windows by their titles
                     top_title, bottom_title = self._window_titles
                     topScr = self.user32.FindWindowW(None, top_title)
@@ -575,13 +614,246 @@ class Launcher:
                         self.user32.SetParent(topScr, self.hwnd_container)
                         apply_docked_style(topScr)
                         self.dock.hwnd_top = topScr
+                        self.dock.invalidate_geom_cache()
 
                     # Dock bottom screen if found and not already docked
                     if bottomScr and self.user32.GetParent(bottomScr) != self.hwnd_container:
                         self.user32.SetParent(bottomScr, self.hwnd_container)
                         apply_docked_style(bottomScr)
                         self.dock.hwnd_bottom = bottomScr
+                        self.dock.invalidate_geom_cache()
+
+                elif self.hwnd_container and not self.docked and not self._restarting:
+                    # Split mode: just track the (possibly new) window handles and
+                    # restore their previous placement after a stream restart
+                    top_title, bottom_title = self._window_titles
+                    topScr = self.user32.FindWindowW(None, top_title)
+                    bottomScr = self.user32.FindWindowW(None, bottom_title)
+                    if topScr and topScr != self.dock.hwnd_top:
+                        self.dock.hwnd_top = topScr
+                        self._place_split_window(topScr, "top")
+                    if bottomScr and bottomScr != self.dock.hwnd_bottom:
+                        self.dock.hwnd_bottom = bottomScr
+                        self._place_split_window(bottomScr, "bottom")
+
+            self._check_stream_health()
             time.sleep(DOCKING_MONITOR_TIME_DELAY)
+
+    # ------------------------------------------------------------------
+    # Stream health / restart
+    # ------------------------------------------------------------------
+    def _notify(self, msg, kind="info"):
+        """Show a status message in the control panel from any thread"""
+        ui = getattr(self, "ui", None)
+        if ui and ui.window:
+            try:
+                ui.window.after(0, lambda: ui.show_status(msg, kind, duration=4.0))
+            except Exception:
+                pass
+
+    def _check_stream_health(self):
+        """
+        Auto-reconnect: if a scrcpy process dies (Wi-Fi blip, device sleep,
+        user closed a split window), restart the streams. Backs off after
+        a few failed attempts so we don't loop forever.
+        """
+        if self._restarting or not self.scrcpy or not self.scrcpy.processes:
+            return
+        dead = self.scrcpy._check_process_alive()
+        if dead is None:
+            # Healthy for a while -> reset the attempt counter
+            if time.time() - self._last_reconnect > 60:
+                self._reconnect_attempts = 0
+            return
+        if self._reconnect_attempts >= 3:
+            return
+        if time.time() - self._last_reconnect < 5:
+            return
+        self._reconnect_attempts += 1
+        self._last_reconnect = time.time()
+        logger.warning(f"A stream stopped - auto-reconnecting (attempt {self._reconnect_attempts}/3)")
+        self._notify(f"Stream dropped - reconnecting ({self._reconnect_attempts}/3)...", "warning")
+        self.restart_streams(reset_layout=False)
+
+    def _remember_split_rects(self):
+        """Store split-window client positions so a restart can restore them"""
+        rects = {}
+        for key, hwnd in (("top", self.dock.hwnd_top), ("bottom", self.dock.hwnd_bottom)):
+            if hwnd and self.user32.IsWindow(hwnd):
+                pt = wintypes.POINT(0, 0)
+                self.user32.ClientToScreen(hwnd, ctypes.byref(pt))
+                rects[key] = (pt.x, pt.y)
+        self._split_rects = rects or None
+
+    def _place_split_window(self, hwnd, key):
+        """Give a fresh split-mode window a title bar and its remembered spot"""
+        try:
+            pos = (self._split_rects or {}).get(key)
+            w, h = ((self.scrcpy.f_w1, self.scrcpy.f_h1) if key == "top"
+                    else (self.scrcpy.f_w2, self.scrcpy.f_h2))
+            if pos is None:
+                return
+            set_client_rect(hwnd, pos[0], pos[1], w, h)
+        except Exception as e:
+            logger.warning(f"Could not restore split window placement: {e}")
+
+    def restart_streams(self, reset_layout=False):
+        """
+        Restart both scrcpy streams in-process with the current settings
+        (FPS, audio, aspect). Much faster than restarting the whole app and
+        keeps the container window, control panel and split/dock state.
+        Runs in a background thread; safe to call from the UI thread.
+        """
+        if self._restarting or not self.scrcpy:
+            return
+        serial = self.scrcpy.serial
+        if not serial:
+            logger.error("restart_streams: no serial")
+            return
+
+        self._restarting = True
+        if not self.docked:
+            self._remember_split_rects()
+
+        def worker():
+            try:
+                old = self.scrcpy
+                old_size = (old.f_w1, old.f_h1, old.f_w2, old.f_h2)
+                try:
+                    old.stop()
+                except Exception as e:
+                    logger.warning(f"Error stopping streams: {e}")
+
+                with self.dock_lock:
+                    self.dock.hwnd_top = None
+                    self.dock.hwnd_bottom = None
+                    self.dock.invalidate_geom_cache()
+
+                new = self._make_manager(old.profile, self.global_scale or old.scale)
+                new.serial = serial
+                new.connection_mode = old.connection_mode
+                new.adb_bin = old.adb_bin or new.adb_bin
+                self.scrcpy = new
+
+                if reset_layout or old_size != (new.f_w1, new.f_h1, new.f_w2, new.f_h2):
+                    self._apply_default_layout()
+
+                self._restarting = False
+                new.start_scrcpy(serial=serial)
+                self._resize_container_window()
+                self.save_layout()
+                self._notify("Streams restarted", "success")
+                ui = getattr(self, "ui", None)
+                if ui:
+                    ui.window.after(0, ui._sync_sliders_from_launcher)
+            except Exception as e:
+                logger.error(f"Stream restart failed: {e}", exc_info=True)
+                self._notify("Stream restart failed - see logs", "error")
+            finally:
+                self._restarting = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def set_stream_option(self, key, value):
+        """Persist a stream option (audio_mode, audio_latency, top_aspect, bottom_aspect)
+        and restart the streams so it takes effect."""
+        if getattr(self, key, None) == value:
+            return
+        setattr(self, key, value)
+        try:
+            self.config.set(key, value)
+        except Exception as e:
+            logger.warning(f"Failed to persist {key}: {e}")
+        logger.info(f"Stream option {key} -> {value}; restarting streams")
+        self.restart_streams(reset_layout=key in ("top_aspect", "bottom_aspect"))
+
+    # ------------------------------------------------------------------
+    # Live scaling / fit to monitor
+    # ------------------------------------------------------------------
+    def set_scale_live(self, scale, keep_positions=True):
+        """
+        Change the window scale immediately (no restart). The stream keeps
+        its resolution; only the on-screen size changes.
+        """
+        if not self.scrcpy or scale <= 0:
+            return
+        old = self.scrcpy.scale or scale
+        self.scrcpy.set_scale(scale)
+        self.global_scale = scale
+        self.launch_scale = scale
+        if keep_positions and old:
+            k = scale / old
+            self.tx, self.ty = int(round(self.tx * k)), int(round(self.ty * k))
+            self.bx, self.by = int(round(self.bx * k)), int(round(self.by * k))
+        else:
+            self._apply_default_layout()
+        self.dock.invalidate_geom_cache()
+        self._resize_container_window()
+        if not self.docked:
+            # Resize split windows in place, keeping their client top-left
+            for key, hwnd in (("top", self.dock.hwnd_top), ("bottom", self.dock.hwnd_bottom)):
+                if hwnd and self.user32.IsWindow(hwnd):
+                    pt = wintypes.POINT(0, 0)
+                    self.user32.ClientToScreen(hwnd, ctypes.byref(pt))
+                    w, h = ((self.scrcpy.f_w1, self.scrcpy.f_h1) if key == "top"
+                            else (self.scrcpy.f_w2, self.scrcpy.f_h2))
+                    set_client_rect(hwnd, pt.x, pt.y, w, h)
+        self.save_scale()
+
+    def fit_to_monitor(self):
+        """
+        Make both screens as large as possible on the current monitor, stacked
+        top-over-bottom and centred. Works docked (resizes/moves the
+        container) and in split mode (stacks the two windows).
+        Returns the new scale, or None on failure.
+        """
+        if not self.scrcpy:
+            return None
+        ref = self.hwnd_container if self.docked else (self.dock.hwnd_top or self.hwnd_container)
+        work = monitor_work_area(ref)
+        if not work:
+            return None
+        wl, wt, wr, wb = work
+        avail_w, avail_h = wr - wl, wb - wt
+
+        w1, h1, w2, h2 = self.scrcpy.content_sizes(1.0)
+        if self.docked:
+            il, it, ir, ib = frame_insets(WS_OVERLAPPEDWINDOW, WS_EX_CONTROLPARENT)
+            scale = min((avail_w - il - ir) / max(w1, w2), (avail_h - it - ib) / (h1 + h2))
+        else:
+            style = (self.user32.GetWindowLongW(self.dock.hwnd_top, -16)
+                     if self.dock.hwnd_top else WS_OVERLAPPEDWINDOW)
+            il, it, ir, ib = frame_insets(style, 0)
+            scale = min((avail_w - il - ir) / max(w1, w2), (avail_h - 2 * (it + ib)) / (h1 + h2))
+        scale = max(0.1, round(scale - 0.0005, 3))
+
+        self.set_scale_live(scale, keep_positions=False)
+        s = self.scrcpy
+
+        if self.docked:
+            cw, ch = self._container_client_size()
+            rect = wintypes.RECT(0, 0, cw, ch)
+            self.user32.AdjustWindowRectEx(
+                ctypes.byref(rect), WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+                False, WS_EX_CONTROLPARENT)
+            outer_w, outer_h = rect.right - rect.left, rect.bottom - rect.top
+            x = wl + (avail_w - outer_w) // 2
+            y = wt + (avail_h - outer_h) // 2
+            self.user32.ShowWindow(self.hwnd_container, 9)  # SW_RESTORE
+            self.user32.SetWindowPos(self.hwnd_container, 0, x, y, outer_w, outer_h, 0x0004 | 0x0010)
+        else:
+            outer_total = s.f_h1 + s.f_h2 + 2 * (it + ib)
+            top_y = wt + (avail_h - outer_total) // 2 + it
+            bottom_y = top_y + s.f_h1 + ib + it
+            cx = wl + avail_w // 2
+            if self.dock.hwnd_top:
+                set_client_rect(self.dock.hwnd_top, cx - s.f_w1 // 2, top_y, s.f_w1, s.f_h1)
+            if self.dock.hwnd_bottom:
+                set_client_rect(self.dock.hwnd_bottom, cx - s.f_w2 // 2, bottom_y, s.f_w2, s.f_h2)
+
+        self.save_layout()
+        logger.info(f"Fit to monitor: scale {scale}, work area {work}")
+        return scale
 
     def toggle_dock(self):
         """
@@ -835,28 +1107,18 @@ class Launcher:
         self._save_device_profile(serial, _profile_key)
 
         # Re-instantiate ScrcpyManager with the actual proper profile
-        self.scrcpy = ScrcpyManager(profile=chosen_profile, scale=self.launch_scale, max_fps=self.max_fps)
+        prev_connection_mode = getattr(self.scrcpy, "connection_mode", None) if self.scrcpy else None
+        self.scrcpy = self._make_manager(chosen_profile, self.launch_scale)
         self.scrcpy.serial = serial
+        self.scrcpy.connection_mode = prev_connection_mode or (
+            "wireless" if self.scrcpy.is_wireless else "usb")
 
         # Compute layout now that profile dimensions are known
         self.global_scale = self.scrcpy.scale
         self.launch_scale = self.scrcpy.scale
 
-        w1, h1 = self.scrcpy.f_w1, self.scrcpy.f_h1
-        w2, h2 = self.scrcpy.f_w2, self.scrcpy.f_h2
-
-        self.ty = 0
-        self.by = int(h1)
-
-        # Screen alignment centering logic
-        if w1 >= w2:
-            # Top screen is wider (or equal): Top pins to 0, Bottom centers
-            self.tx = 0
-            self.bx = int((w1 - w2) * HALF)
-        else:
-            # Bottom screen is wider: Bottom pins to 0, Top centers over it
-            self.bx = 0
-            self.tx = int((w2 - w1) * HALF)
+        # Stacked + centred default layout
+        self._apply_default_layout()
 
         logger.info(
             f"Layout set: Top({self.tx}, {self.ty}), Bottom({self.bx}, {self.by}) "
@@ -907,8 +1169,7 @@ class Launcher:
             logger.warning("_resize_container_window: no container hwnd yet")
             return
 
-        client_w = max(self.scrcpy.f_w1, self.scrcpy.f_w2 + abs(self.bx))
-        client_h = self.scrcpy.f_h1 + self.scrcpy.f_h2
+        client_w, client_h = self._container_client_size()
 
         style = WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS
         rect  = wintypes.RECT(0, 0, int(client_w), int(client_h))
@@ -958,26 +1219,13 @@ class Launcher:
         # make a new ScrcpyManager with the new profile's default scale
         self.launch_scale = profile.default_ui_scale
         self.global_scale = profile.default_ui_scale
-        self.scrcpy = ScrcpyManager(
-            profile=profile,
-            scale=self.launch_scale,
-            max_fps=self.max_fps,
-        )
+        old_mode = getattr(self.scrcpy, "connection_mode", None)
+        self.scrcpy = self._make_manager(profile, self.launch_scale)
         self.scrcpy.serial = serial
+        self.scrcpy.connection_mode = old_mode
 
         # setup default centred layout
-        w1, h1 = self.scrcpy.f_w1, self.scrcpy.f_h1
-        w2, h2 = self.scrcpy.f_w2, self.scrcpy.f_h2
-
-        self.ty = 0
-        self.by = int(h1)
-
-        if w1 >= w2:
-            self.tx = 0
-            self.bx = int((w1 - w2) * HALF)
-        else:
-            self.bx = 0
-            self.tx = int((w2 - w1) * HALF)
+        self._apply_default_layout()
 
         logger.info(
             f"Profile switch layout: Top({self.tx},{self.ty}) "
@@ -1027,12 +1275,31 @@ class Launcher:
         self.running = False
         self.save_layout()
 
-        # Taskkill the scrcpy processes
-        subprocess.run(
-            ["taskkill", "/F", "/IM", "scrcpy.exe", "/T"],
-            capture_output=True,
-            creationflags=CREATE_NO_WINDOW,
-        )
+        # Stop only OUR scrcpy processes (not any other scrcpy the user runs)
+        for proc in list(getattr(self.scrcpy, "processes", []) or []):
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True,
+                    creationflags=CREATE_NO_WINDOW,
+                    timeout=5,
+                )
+            except Exception:
+                pass
+
+        # Shut down the bundled adb server so adb.exe doesn't linger in the
+        # background and pile up across launches (upstream issue #11)
+        try:
+            adb_bin = getattr(self.scrcpy, "adb_bin", None) or resolve_adb("adb")
+            if adb_bin:
+                subprocess.run(
+                    [adb_bin, "kill-server"],
+                    capture_output=True,
+                    creationflags=CREATE_NO_WINDOW,
+                    timeout=5,
+                )
+        except Exception:
+            pass
 
         # Stop the CTK main loop
         try:
