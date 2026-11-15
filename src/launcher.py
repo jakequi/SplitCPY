@@ -167,6 +167,7 @@ class Launcher:
         # Stream options (applied by restarting the streams)
         self.audio_mode = self.config.get("audio_mode", "pc")
         self.audio_latency = self.config.get("audio_latency", "low")
+        self.quality = self.config.get("quality", "high")
         # Visible region of each screen (PC-side crop, no restart needed)
         self.top_aspect = self._normalise_aspect(self.config.get("top_aspect", FULL_SCREEN_LABEL))
         self.bottom_aspect = self._normalise_aspect(self.config.get("bottom_aspect", FULL_SCREEN_LABEL))
@@ -317,6 +318,7 @@ class Launcher:
             audio_mode=self.audio_mode,
             audio_latency=self.audio_latency,
             crops=self.crops,
+            quality=self.quality,
         )
 
     def _apply_default_layout(self):
@@ -1116,6 +1118,7 @@ class Launcher:
             "volume": self.volume,
             "audio_mode": self.audio_mode,
             "audio_latency": self.audio_latency,
+            "quality": self.quality,
             "max_fps": self.max_fps,
             "stage_height": self.stage_height,
             "split": not self.docked,
@@ -1126,7 +1129,7 @@ class Launcher:
         if not data or not self.scrcpy:
             return
         restart = False
-        for key in ("audio_mode", "audio_latency"):
+        for key in ("audio_mode", "audio_latency", "quality"):
             if key in data and data[key] != getattr(self, key):
                 setattr(self, key, data[key])
                 self.config.set(key, data[key])
@@ -1188,8 +1191,9 @@ class Launcher:
                 else:
                     result = None
                 key, reason = link_test.recommend(result or {}, wireless, self.max_fps)
+                quality = link_test.recommend_quality(result or {}, wireless, self.max_fps, key)
                 if ui:
-                    self.ui_calls.put(lambda: ui.on_link_test_result(result, key, reason))
+                    self.ui_calls.put(lambda: ui.on_link_test_result(result, key, reason, quality))
             except Exception as e:
                 logger.error(f"Link test failed: {e}", exc_info=True)
                 self._notify(f"Connection test failed: {e}", "error")
@@ -1380,6 +1384,22 @@ class Launcher:
                 self._restarting = False
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def set_stream_options(self, options):
+        """Set several stream options at once with a single stream restart"""
+        changed = False
+        for key, value in options.items():
+            if getattr(self, key, None) != value:
+                setattr(self, key, value)
+                try:
+                    self.config.set(key, value)
+                except Exception as e:
+                    logger.warning(f"Failed to persist {key}: {e}")
+                changed = True
+        if changed:
+            logger.info(f"Stream options {options}; restarting streams")
+            self.restart_streams()
+        return changed
 
     def set_stream_option(self, key, value):
         """Persist an audio option (audio_mode, audio_latency) and restart the

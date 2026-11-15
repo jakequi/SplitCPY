@@ -9,7 +9,7 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 - **Fullscreen**: the game area is centred on the monitor at the largest size, over a separate black backdrop window that OBS's Window Capture never sees
 - **Gap** slider between stacked screens
 - **Global hotkeys** (work in-game): Ctrl+Alt+1 Both, Ctrl+Alt+2 Top, Ctrl+Alt+3 Bottom, Ctrl+Alt+S cycle, Ctrl+Alt+F fullscreen
-- **Aspect presets by ratio** - e.g. "4:3 (DS, NES, SNES, PlayStation, ...)", "3:2 (Game Boy Advance)", "31:27 (Thor Bottom Screen)", sorted numerically. Cropping is done on the PC side, so it's instant and never restarts the stream
+- **Aspect presets by ratio** - the button shows the ratio (1:1, 3:2, 4:3 ... 80:51, sorted numerically) and a strip beside it lists the consoles using it ("3DS-B, Arcade, DC, DS, GC, MD, N64, ..."), scrollable sideways with the mouse wheel or by dragging. Cropping is done on the PC side, so it's instant and never restarts the stream
 - **Profiles**: save the whole setup (view, aspect, gap, volume, audio, latency, FPS, split/combined); star one as default to load on start-up
 - **Device profiles toggle** (Settings): off = always use the built-in AYN Thor profile, no device selector
 - **Ctrl+Alt+M** shows/hides the control panel, even over fullscreen
@@ -19,6 +19,7 @@ Fork of [DualCPY](https://github.com/theswest/DualCPY) by the_swest.
 - **Volume slider** (sets the stream's volume in the Windows mixer)
 - **Audio output** setting: PC, Device (keep sound on the handheld) or Both (Android 13+)
 - **Latency** setting: Low (default; full quality, smallest buffers), Balanced, Stable
+- **Quality** setting (Standard / High / Very High / Max) - video bitrate; the connection test picks the highest your link carries
 - **Split Windows**: two independent windows you can move, resize (aspect-locked) and capture separately; closing one recombines them
 - **Fit to Monitor**: maximise the window, or stack split windows as large as possible
 - Auto-reconnect when a stream drops (up to 3 attempts)

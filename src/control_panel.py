@@ -406,15 +406,13 @@ class CTkUI:
         # -------------------------------------------------------- Aspect
         self._separator()
         self._section("Aspect (crop black bars)")
-        aspects = list(ASPECT_PRESETS.keys())
-        self._top_aspect_var = self._dropdown(
-            self._scroll, "Top", aspects, self.l.top_aspect,
-            lambda v: self._on_aspect("top", v))
-        self._bottom_aspect_var = self._dropdown(
-            self._scroll, "Bottom", aspects, self.l.bottom_aspect,
-            lambda v: self._on_aspect("bottom", v))
-        self._hint("Pick the system you're playing to cut the black bars - the screen then takes the "
-                   "game's shape. Instant, never restarts the stream.")
+        from src.scrcpy_manager import CONSOLE_ACRONYMS
+        self._aspect_rows = {}
+        self._aspect_row("top", "Top", list(ASPECT_PRESETS.keys()))
+        self._aspect_row("bottom", "Bottom", list(ASPECT_PRESETS.keys()))
+        self._hint("Pick the ratio of what you're playing to cut the black bars - the screen then "
+                   "takes the game's shape. Instant, never restarts the stream. Scroll the console "
+                   "list sideways with the mouse wheel or by dragging.\n" + CONSOLE_ACRONYMS + ".")
 
         # -------------------------------------------------------- Audio & Stream
         self._separator()
@@ -430,12 +428,20 @@ class CTkUI:
             self._scroll, "Latency", [AUDIO_LATENCY_LABELS[k] for k in AUDIO_LATENCY_MODES],
             AUDIO_LATENCY_LABELS.get(self.l.audio_latency, "Low"),
             lambda v: self._on_stream_option("audio_latency", self._latency_label_to_key[v]))
+        from src.scrcpy_manager import QUALITY_MODES, QUALITY_LABELS
+        self._quality_label_to_key = {QUALITY_LABELS[k]: k for k in QUALITY_MODES}
+        self._quality_var = self._dropdown(
+            self._scroll, "Quality", [QUALITY_LABELS[k] for k in QUALITY_MODES],
+            QUALITY_LABELS.get(self.l.quality, "High"),
+            lambda v: self._on_stream_option("quality", self._quality_label_to_key[v]))
         self._fps_var = self._dropdown(
             self._scroll, "Frame rate", [fps_label(v) for v in ALLOWED_FPS_VALUES],
             fps_label(self.l.max_fps), self._on_fps_change)
         self._hint("Audio output - PC, Device (sound stays on the handheld) or Both (Android 13+).\n"
                    "Latency - Low: smallest delay, full quality (USB / strong Wi-Fi). If sound warps "
                    "or crackles, try Balanced, then Stable.\n"
+                   "Quality - how much detail is sent per second (bitrate): higher = sharper fast "
+                   "motion and dark scenes, but needs more bandwidth. Max suits USB / fast Wi-Fi.\n"
                    "Frame rate - 120 FPS (experimental) needs a 120 Hz+ monitor and a game running at "
                    "120; it uses ~1.5x the bandwidth. OBS still records at its own rate (usually 60).\n"
                    "Changing these restarts the streams (a second or two).")
@@ -688,6 +694,8 @@ class CTkUI:
         if self.l.set_crop(key, crop, name):
             from src.scrcpy_manager import aspect_short
             self.show_status(f"{key.title()} screen: {aspect_short(name)}", "success")
+        # The menu writes the full label into the button; show just the ratio
+        self._set_aspect_display(key, getattr(self.l, f"{key}_aspect"))
 
     # ------------------------------------------------------------ profiles
     def refresh_profile_list(self):
@@ -842,21 +850,87 @@ class CTkUI:
         self._link_result.configure(text="Testing... (about 10 seconds)", text_color=TEXT_COLOUR)
         self.l.run_link_test()
 
-    def on_link_test_result(self, result, key, reason):
-        """Show the measurements and apply the recommended Latency setting"""
-        from src.scrcpy_manager import AUDIO_LATENCY_LABELS
+    def on_link_test_result(self, result, key, reason, quality=None):
+        """Show the measurements and apply the recommended Latency + Quality"""
+        from src.scrcpy_manager import AUDIO_LATENCY_LABELS, QUALITY_LABELS
+        quality = quality or self.l.quality
         label = AUDIO_LATENCY_LABELS.get(key, key)
+        qlabel = QUALITY_LABELS.get(quality, quality)
         if result:
             text = (f"Response {result['rtt_ms']:.0f} ms, jitter {result['jitter_ms']:.0f} ms, "
-                    f"speed {result['mbps']:.0f} Mbps\nBest: {label} - {reason}")
+                    f"speed {result['mbps']:.0f} Mbps\n"
+                    f"Best: Latency {label}, Quality {qlabel} - {reason}")
         else:
-            text = f"USB connection\nBest: {label} - {reason}"
+            text = f"USB connection\nBest: Latency {label}, Quality {qlabel} - {reason}"
         self._link_result.configure(text=text, text_color=SUCCESS_COLOUR)
-        if key != self.l.audio_latency:
-            self._latency_var.set(label)
-            self._on_stream_option("audio_latency", key)
+        self._latency_var.set(label)
+        self._quality_var.set(qlabel)
+        if self.l.set_stream_options({"audio_latency": key, "quality": quality}):
+            self.show_status("Applying best settings - restarting streams...", "info")
         else:
-            self.show_status(f"Already on the best setting ({label})", "success")
+            self.show_status("Already on the best settings", "success")
+
+    # ------------------------------------------------------------ aspect rows
+    def _aspect_row(self, key, label, values):
+        """
+        [Top] [4:3 v] [3DS-B, Arcade, DC, DS, ... (scrolls sideways)]
+        The button shows just the ratio; the strip shows which consoles use it
+        and scrolls with the mouse wheel, by dragging, or with the scrollbar.
+        """
+        from src.scrcpy_manager import aspect_short
+        row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        row.pack(fill="x", padx=16, pady=3)
+        row.columnconfigure(2, weight=1)
+        ctk.CTkLabel(row, text=label, font=make_font(13), text_color=TEXT_COLOUR,
+                     width=60, anchor="w").grid(row=0, column=0, sticky="w")
+        current = getattr(self.l, f"{key}_aspect")
+        var = tk.StringVar(value=aspect_short(current))
+        ctk.CTkOptionMenu(
+            row, variable=var, values=values, width=96,
+            command=lambda v, k=key: self._on_aspect(k, v),
+            fg_color=PANEL_COLOUR, button_color=BORDER_COLOUR,
+            button_hover_color=ACCENT_COLOUR, text_color=TEXT_COLOUR,
+            dropdown_fg_color=PANEL_COLOUR, dropdown_hover_color=BORDER_COLOUR,
+            dropdown_text_color=TEXT_COLOUR, font=make_font(13, "bold"),
+            dropdown_font=make_font(13), dynamic_resizing=False,
+        ).grid(row=0, column=1, padx=(6, 8))
+
+        strip = tk.Canvas(row, height=26, bg=PANEL_COLOUR, highlightthickness=0, bd=0,
+                          xscrollincrement=12, cursor="sb_h_double_arrow")
+        strip.grid(row=0, column=2, sticky="ew")
+        text_id = strip.create_text(8, 13, anchor="w", text="", fill=TEXT_COLOUR, font=make_font(12))
+        bar = ctk.CTkScrollbar(row, orientation="horizontal", height=10, command=strip.xview,
+                               button_color=BORDER_COLOUR, button_hover_color=ACCENT_COLOUR)
+        bar.grid(row=1, column=2, sticky="ew", pady=(1, 0))
+        strip.configure(xscrollcommand=bar.set)
+
+        def wheel(e):
+            strip.xview_scroll(-1 if e.delta > 0 else 1, "units")
+            return "break"  # don't also scroll the whole panel
+
+        strip.bind("<MouseWheel>", wheel)
+        strip.bind("<ButtonPress-1>", lambda e: strip.scan_mark(e.x, 0))
+        strip.bind("<B1-Motion>", lambda e: strip.scan_dragto(e.x, 0, gain=1))
+        self._aspect_rows[key] = {"var": var, "strip": strip, "text": text_id}
+        self._set_aspect_display(key, current)
+
+    def _set_aspect_display(self, key, label):
+        from src.scrcpy_manager import aspect_short, FULL_SCREEN_LABEL
+        row = self._aspect_rows.get(key)
+        if not row:
+            return
+        short = aspect_short(label)
+        row["var"].set("Full" if label == FULL_SCREEN_LABEL else short)
+        if label == FULL_SCREEN_LABEL:
+            consoles = "No crop - the whole screen"
+        else:
+            consoles = label[len(short):].strip().lstrip("(").rstrip(")")
+        strip = row["strip"]
+        strip.itemconfigure(row["text"], text=consoles)
+        strip.update_idletasks()
+        x0, y0, x1, y1 = strip.bbox(row["text"])
+        strip.configure(scrollregion=(0, 0, x1 + 8, 26))
+        strip.xview_moveto(0)
 
     def _on_restart(self):
         self.show_status("Restarting streams...", "info")
@@ -1047,8 +1121,10 @@ class CTkUI:
             self._refresh_profile_label()
         try:
             from src.scrcpy_manager import AUDIO_MODE_LABELS, AUDIO_LATENCY_LABELS
-            self._top_aspect_var.set(self.l.top_aspect)
-            self._bottom_aspect_var.set(self.l.bottom_aspect)
+            self._set_aspect_display("top", self.l.top_aspect)
+            self._set_aspect_display("bottom", self.l.bottom_aspect)
+            from src.scrcpy_manager import QUALITY_LABELS
+            self._quality_var.set(QUALITY_LABELS.get(self.l.quality, "High"))
             self._fps_var.set(fps_label(self.l.max_fps))
             self._audio_var.set(AUDIO_MODE_LABELS.get(self.l.audio_mode, "PC"))
             self._latency_var.set(AUDIO_LATENCY_LABELS.get(self.l.audio_latency, "Low"))

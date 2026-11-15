@@ -102,6 +102,13 @@ WIRELESS_PROFILE = {
 }
 AUDIO_BIT_RATE = "128K"
 
+# Picture quality = video bitrate multiplier. More bits = sharper fast motion
+# and dark scenes (less blocking), but more bandwidth. Max is only worth it
+# on USB or very fast Wi-Fi.
+QUALITY_MODES = ("standard", "high", "very_high", "max")
+QUALITY_LABELS = {"standard": "Standard", "high": "High", "very_high": "Very High", "max": "Max"}
+QUALITY_MULTIPLIER = {"standard": 0.7, "high": 1.0, "very_high": 1.4, "max": 2.0}
+
 FULL_CROP = (0.0, 0.0, 1.0, 1.0)
 
 
@@ -121,12 +128,44 @@ FULL_SCREEN_LABEL = "Full Screen (no crop)"
 # ratio -> consoles / uses that display at that ratio
 _RATIO_CONSOLES = {
     (1, 1): ["Square"],
+    (3, 2): ["GBA"],
+    (4, 3): ["3DS-B", "Arcade", "DC", "DS", "GC", "MD", "N64", "NES", "PS1", "PS2",
+             "SNES", "SS", "TG16"],
+    (5, 3): ["3DS-T"],
+    (8, 7): ["NES/SNES pixel"],
+    (10, 9): ["GB", "GBC", "GG"],
+    (12, 7): ["VB"],
+    (14, 9): ["WS"],
+    (16, 9): ["PSP", "Switch", "Vita", "Wide"],
+    (16, 10): ["Wide"],
+    (20, 19): ["NGP"],
+    (31, 27): ["Thor-B"],
+    (80, 51): ["Lynx"],
+}
+
+# Full names for the acronyms (shown in the panel hint)
+CONSOLE_ACRONYMS = (
+    "3DS-T/B 3DS top/bottom, DC Dreamcast, GB/GBC/GBA Game Boy/Color/Advance, GC GameCube, "
+    "GG Game Gear, MD Mega Drive/Genesis, N64 Nintendo 64, NGP Neo Geo Pocket, "
+    "PS1/PS2 PlayStation, SS Sega Saturn, TG16 TurboGrafx-16/PC Engine, Thor-B Thor bottom, "
+    "VB Virtual Boy, WS WonderSwan"
+)
+
+
+def _ratio_label(w, h):
+    names = sorted(_RATIO_CONSOLES[(w, h)], key=str.lower)
+    return f"{w}:{h} ({', '.join(names)})"
+
+
+# Labels used by the previous version (full console names) -> ratio
+_PREVIOUS_NAMES = {
+    (1, 1): ["Square"],
     (3, 2): ["Game Boy Advance"],
     (4, 3): ["3DS Bottom", "Arcade", "Dreamcast", "DS", "GameCube", "Genesis / Mega Drive",
              "NES", "Nintendo 64", "PC Engine / TurboGrafx-16", "PlayStation", "PlayStation 2",
              "Saturn", "SNES"],
     (5, 3): ["3DS Top"],
-    (8, 7): ["NES / SNES Pixel-Perfect"],
+    (8, 7): ["NES / SNES Pixel-Perfect", "NES Pixel-Perfect", "SNES Pixel-Perfect"],
     (10, 9): ["Game Boy", "Game Boy Color", "Game Gear"],
     (12, 7): ["Virtual Boy"],
     (14, 9): ["WonderSwan"],
@@ -138,8 +177,8 @@ _RATIO_CONSOLES = {
 }
 
 
-def _ratio_label(w, h):
-    names = sorted(_RATIO_CONSOLES[(w, h)], key=str.lower)
+def _previous_label(w, h):
+    names = sorted(_PREVIOUS_NAMES[(w, h)], key=str.lower)
     return f"{w}:{h} ({', '.join(names)})"
 
 
@@ -153,16 +192,14 @@ ASPECT_ALIASES = {
     "Full screen": FULL_SCREEN_LABEL,
     "Detected": FULL_SCREEN_LABEL,
 }
-for (_w, _h), _names in _RATIO_CONSOLES.items():
+for (_w, _h), _names in _PREVIOUS_NAMES.items():
     _label = _ratio_label(_w, _h)
     ASPECT_ALIASES[f"{_w}:{_h}"] = _label
+    ASPECT_ALIASES[_previous_label(_w, _h)] = _label          # "4:3 (3DS Bottom, ...)"
     for _n in _names:
         ASPECT_ALIASES[f"{_n} ({_w}:{_h})"] = _label           # "DS (4:3)" style
-    ASPECT_ALIASES[f"Widescreen ({_w}:{_h})"] = _label
 ASPECT_ALIASES.update({
-    "Square (1:1)": _ratio_label(1, 1),
-    "SNES Pixel-Perfect (8:7)": _ratio_label(8, 7),
-    "NES Pixel-Perfect (8:7)": _ratio_label(8, 7),
+    "4:3 (3DS-B, Arcade, DC, DS, GC, GEN/MD, N64, NES, PCE/TG16, PS1, PS2, SAT, SNES)": _ratio_label(4, 3),
     # first-generation long labels
     "16:9  Switch / PSP / Vita / modern": _ratio_label(16, 9),
     "5:3  3DS top": _ratio_label(5, 3),
@@ -204,7 +241,7 @@ class ScrcpyManager:
     def __init__(self, profile, scale=None, scrcpy_bin=None,
                  adb_bin=None, enable_audio_top=True, max_fps=int(DEFAULT_MAX_FPS),
                  audio_mode="pc", audio_latency="low",
-                 crops=None):
+                 crops=None, quality="high"):
         """
         Initialize the scrcpy manager.
         """
@@ -220,6 +257,7 @@ class ScrcpyManager:
 
         self.audio_mode = audio_mode if audio_mode in AUDIO_MODES else "pc"
         self.audio_latency = audio_latency if audio_latency in AUDIO_LATENCY_MODES else "low"
+        self.quality = quality if quality in QUALITY_MODES else "high"
         # Visible region of each screen as (left, top, right, bottom) fractions
         # of the full frame. Applied on the PC side (viewport), so changing it
         # never restarts the stream.
@@ -626,6 +664,7 @@ class ScrcpyManager:
         # More frames per second need more bits to keep each frame as sharp
         # (sub-linear: consecutive frames at 120 FPS are very similar)
         fps_factor = max(1.0, (self.max_fps / 60.0) ** 0.6)
+        fps_factor *= QUALITY_MULTIPLIER.get(self.quality, 1.0)
 
         if custom_args:
             # Audio is managed by the control panel; ignore audio flags here

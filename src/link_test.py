@@ -152,3 +152,17 @@ def recommend(result, wireless, fps=60):
                 return key, "Good Wi-Fi with some variation - a bit more audio buffer avoids warping"
             return key, "Busy or weak Wi-Fi - extra buffering keeps the audio clean"
     return "stable", "Weak or very unsteady Wi-Fi - Stable is the safest; USB would be much better"
+
+
+def recommend_quality(result, wireless, fps=60, latency_key="low"):
+    """Highest picture quality the link carries with headroom"""
+    from src.scrcpy_manager import QUALITY_MULTIPLIER
+    if not wireless:
+        return "very_high"
+    fps_factor = max(1.0, (fps / 60.0) ** 0.6)
+    best = "standard"
+    for q in ("standard", "high", "very_high", "max"):
+        need = PROFILE_NEED_MBPS.get(latency_key, 28) * fps_factor * QUALITY_MULTIPLIER[q] * HEADROOM
+        if result.get("mbps", 0) >= need:
+            best = q
+    return best
