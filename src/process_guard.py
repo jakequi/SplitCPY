@@ -104,6 +104,8 @@ def init():
         _job = job  # intentionally never closed: closing it is what kills the children
         _self_in_job = bool(kernel32.AssignProcessToJobObject(job, kernel32.GetCurrentProcess()))
         logger.info(f"Process guard active (self in job: {_self_in_job})")
+        # SplitCPY hosts the stream windows, so it must not be slowed either
+        no_background_throttling()
     except Exception as e:
         logger.warning(f"Process guard unavailable: {e}")
 
@@ -122,6 +124,41 @@ def adopt(popen):
             kernel32.AssignProcessToJobObject(_job, wintypes.HANDLE(int(handle)))
     except Exception as e:
         logger.debug(f"Could not add PID {getattr(popen, 'pid', '?')} to job: {e}")
+
+
+# ----------------------------------------------------------------------
+# Background throttling
+# ----------------------------------------------------------------------
+# Windows 11 treats processes whose window isn't in the foreground as
+# background work: it may run them on efficiency cores at lower clocks
+# (EcoQoS) and ignore their timer-resolution requests. For a live stream
+# that shows up as lag whenever another window has focus. Opting out is a
+# documented per-process switch, no admin rights needed.
+class _POWER_THROTTLING_STATE(ctypes.Structure):
+    _fields_ = [("Version", wintypes.ULONG), ("ControlMask", wintypes.ULONG),
+                ("StateMask", wintypes.ULONG)]
+
+
+_ProcessPowerThrottling = 4
+_THROTTLE_EXECUTION_SPEED = 0x1
+_THROTTLE_IGNORE_TIMER_RESOLUTION = 0x4
+kernel32.SetProcessInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]
+kernel32.SetProcessInformation.restype = wintypes.BOOL
+
+
+def no_background_throttling(popen=None):
+    """Keep a child process (or SplitCPY itself, when popen is None) at full speed when unfocused"""
+    try:
+        handle = kernel32.GetCurrentProcess() if popen is None else wintypes.HANDLE(int(popen._handle))
+        state = _POWER_THROTTLING_STATE(
+            1, _THROTTLE_EXECUTION_SPEED | _THROTTLE_IGNORE_TIMER_RESOLUTION, 0)
+        if not kernel32.SetProcessInformation(handle, _ProcessPowerThrottling,
+                                              ctypes.byref(state), ctypes.sizeof(state)):
+            raise OSError(ctypes.get_last_error())
+        return True
+    except Exception as e:
+        logger.debug(f"Could not turn off background throttling: {e}")
+        return False
 
 
 def breakaway_flags():

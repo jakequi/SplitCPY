@@ -21,7 +21,7 @@
 
 ## Download
 
-Grab **`SplitCPY-v1.0.0-windows.zip`** from the
+Grab **`SplitCPY-v1.0.1-windows.zip`** from the
 [latest release](https://github.com/jakequi/SplitCPY/releases/latest), unzip it anywhere
 and run **`SplitCPY.exe`**. scrcpy and adb are included - nothing else to install.
 `config/` and `logs/` are created next to the exe on first launch.

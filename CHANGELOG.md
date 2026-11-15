@@ -1,5 +1,13 @@
 # Changelog
 
+## SplitCPY 1.0.1 - 15-11-2026
+
+### Fixed
+- **Stutter with the Thor at 120 Hz**: while a stream at 60 FPS or less runs, the handheld's screens are switched to 60 Hz and your setting is put back on exit (or on the next connect after a crash). At 120 Hz games hand frames to the encoder unevenly and the 60 FPS cap discarded real frames - 47-56 FPS over USB vs a steady 58-60 at 60 Hz. Turn off with `"stream_at_60hz": false` in config.json
+- **Tearing in fullscreen**: vsync is now on when the PC monitor runs at 100 Hz or more (costs at most one refresh, ~5 ms at 195 Hz); still off on 60 Hz monitors
+- **Lag when the stream isn't focused**: SplitCPY and scrcpy opt out of Windows 11's background power throttling (EcoQoS / ignored timer resolution)
+- **Wi-Fi stutter and audio dropouts**: over Wi-Fi the handheld's Wi-Fi power save is now switched off while streaming, via a tiny helper (`bin/splitcpy-wifilock.dex`, source in `android/wifilock`) that holds Android's high-performance Wi-Fi lock. Power save was batching packets, which showed up as sudden FPS collapses (e.g. 30 → 4 fps) with the audio cutting out. No root needed; the lock is released when the stream stops, and Android drops it automatically if SplitCPY crashes
+
 ## SplitCPY 1.0.0 - 15-11-2026
 
 First release of SplitCPY, a fork of [DualCPY](https://github.com/theswest/DualCPY) 1.0.0 by the_swest.

@@ -250,6 +250,18 @@ SCRCPY_TERMINATE_TIMEOUT = 3
 # Wireless connection defaults
 DEFAULT_WIRELESS_PORT = 5555
 
+# Wi-Fi lock helper (android/wifilock): a tiny dex run on the device through
+# app_process that holds a high-performance Wi-Fi lock, which switches off
+# the device's Wi-Fi power save while streaming. Power save batches packets,
+# which shows up as sudden FPS collapses and audio dropouts over Wi-Fi.
+# `cmd wifi force-hi-perf-mode` would do the same but needs root.
+WIFI_LOCK_DEX = "splitcpy-wifilock.dex"
+WIFI_LOCK_REMOTE = "/data/local/tmp/splitcpy-wifilock.dex"
+WIFI_LOCK_PUSH_TIMEOUT = 10
+
+# Turn scrcpy's vsync on when the PC monitor refreshes at least this fast
+VSYNC_MIN_MONITOR_HZ = 100
+
 # Main ScrcpyManager class
 class ScrcpyManager:
     """
@@ -275,8 +287,10 @@ class ScrcpyManager:
         # Configurable per-instance FPS cap (override the module default)
         self.max_fps = int(max_fps) if max_fps else int(DEFAULT_MAX_FPS)
         self._scrcpy_log_handles = []
+        # adb shell running the Wi-Fi lock helper (wireless only)
+        self._wifi_lock_proc = None
 
-        self.audio_mode = audio_mode if audio_mode in AUDIO_MODES else "pc"
+        self.audio_mode =audio_mode if audio_mode in AUDIO_MODES else "pc"
         self.audio_latency = audio_latency if audio_latency in AUDIO_LATENCY_MODES else "low"
         self.quality = quality if quality in QUALITY_MODES else "high"
         self.screens_off = bool(screens_off)  # unused: screens are dimmed via settings
@@ -782,6 +796,9 @@ class ScrcpyManager:
 
         time.sleep(self.scrcpy_start_delay)
 
+        # Keep the device's Wi-Fi out of power save for the whole session
+        self._start_wifi_lock(use_serial)
+
         # Launch top screen
         logger.info("Starting top screen window")
         self.serial = use_serial
@@ -913,17 +930,19 @@ class ScrcpyManager:
                     stdout_target = subprocess.DEVNULL
                     stderr_target = subprocess.DEVNULL
 
-                # Disable SDL2's vsync wait inside scrcpy. With vsync
-                # ON, SDL_RenderPresent blocks until the next monitor
-                # refresh - on high-refresh-rate monitors (e.g. 144 /
-                # 165 / 240 Hz) the timing slots don't align with the
-                # 60 Hz incoming frame stream, and scrcpy ends up
-                # skipping frames. Setting SDL_RENDER_VSYNC=0 makes
-                # the renderer present every decoded frame as soon as
-                # it arrives - the small chance of tearing on a
-                # 200+ Hz panel is essentially invisible.
+                # Vsync. Off, every frame is shown the instant it's
+                # decoded - but when the window covers the monitor
+                # (fullscreen) Windows presents it directly instead of
+                # through the desktop compositor, and it visibly tears.
+                # On a fast monitor (100 Hz+) waiting for the next refresh
+                # costs at most a few ms (5 ms at 195 Hz) and removes the
+                # tearing. On a 60 Hz monitor the wait can be a whole
+                # frame and 60 fps streams drift against it, so vsync
+                # stays off there.
                 child_env = os.environ.copy()
-                child_env["SDL_RENDER_VSYNC"] = "0"
+                monitor_hz = self._monitor_hz()
+                child_env["SDL_RENDER_VSYNC"] = "1" if monitor_hz >= VSYNC_MIN_MONITOR_HZ else "0"
+                logger.info(f"Monitor {monitor_hz} Hz -> vsync {'on' if child_env['SDL_RENDER_VSYNC'] == '1' else 'off'}")
                 # Strip PyInstaller bootloader env vars so a frozen-
                 # parent's _MEIPASS isn't inherited by scrcpy.
                 for _k in (
@@ -942,6 +961,7 @@ class ScrcpyManager:
                     env=child_env,
                 )
                 process_guard.adopt(proc)
+                process_guard.no_background_throttling(proc)
 
                 # Quick check if process survives startup
                 time.sleep(SCRCPY_CREATION_DELAY)
@@ -970,6 +990,91 @@ class ScrcpyManager:
         # All attempts failed
         logger.error(f"All {self.scrcpy_retry_count} attempts to start scrcpy {label} window failed")
         raise last_exc
+
+    # ------------------------------------------------------------------
+    # Wi-Fi power save
+    # ------------------------------------------------------------------
+    def _start_wifi_lock(self, serial):
+        """
+        Over Wi-Fi, run the lock helper on the device for as long as the
+        stream runs. The lock belongs to the helper process: when its adb
+        shell closes (stop(), crash, SplitCPY killed) Android drops it, so
+        the device can never be left with power save off. Best effort - any
+        failure only means the old behaviour.
+        """
+        self._stop_wifi_lock()
+        if not self._is_wireless_serial(serial) or not self.adb_bin:
+            return
+        dex = os.path.join(os.path.dirname(self.adb_bin), WIFI_LOCK_DEX)
+        if not os.path.isfile(dex):
+            logger.info(f"Wi-Fi lock helper not found ({dex}); Wi-Fi power save stays on")
+            return
+        try:
+            push = subprocess.run(
+                [self.adb_bin, "-s", serial, "push", dex, WIFI_LOCK_REMOTE],
+                capture_output=True, text=True, timeout=WIFI_LOCK_PUSH_TIMEOUT,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            if push.returncode != 0:
+                logger.warning(f"Could not push Wi-Fi lock helper: {(push.stderr or push.stdout).strip()}")
+                return
+            proc = subprocess.Popen(
+                [self.adb_bin, "-s", serial, "shell",
+                 f"CLASSPATH={WIFI_LOCK_REMOTE} app_process / WifiLock"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, errors="replace", creationflags=CREATE_NO_WINDOW,
+            )
+            process_guard.adopt(proc)
+            self._wifi_lock_proc = proc
+            threading.Thread(target=self._watch_wifi_lock, args=(proc,),
+                             name="wifi-lock", daemon=True).start()
+        except Exception as e:
+            logger.warning(f"Could not start Wi-Fi lock helper: {e}")
+
+    @staticmethod
+    def _monitor_hz():
+        """Refresh rate of the main monitor (0 if unknown)"""
+        try:
+            user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
+            user32.GetDC.restype = ctypes.c_void_p
+            gdi32.GetDeviceCaps.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            user32.ReleaseDC.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            hdc = user32.GetDC(None)
+            try:
+                return int(gdi32.GetDeviceCaps(hdc, 116))  # VREFRESH
+            finally:
+                user32.ReleaseDC(None, hdc)
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _watch_wifi_lock(proc):
+        """Log the helper's output (and drain its pipe) until it exits"""
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                if line == "LOCKED":
+                    logger.info("Wi-Fi power save disabled on the device for this session")
+                else:
+                    logger.info(f"Wi-Fi lock helper: {line}")
+        except Exception:
+            pass
+        logger.info(f"Wi-Fi lock helper ended (exit code {proc.wait()})")
+
+    def _stop_wifi_lock(self):
+        proc, self._wifi_lock_proc = self._wifi_lock_proc, None
+        if not proc or proc.poll() is not None:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=PROCESS_TERMINATE_TIMEOUT)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
     # Check if process is alive
     def _check_process_alive(self):
@@ -1006,6 +1111,9 @@ class ScrcpyManager:
         logger.info("=" * LOG_MULT)
         logger.info("Stopping ScrcpyManager")
         logger.info("=" * LOG_MULT)
+
+        # Hand Wi-Fi power save back to the device
+        self._stop_wifi_lock()
 
         if not self.processes:
             logger.info("No scrcpy processes to stop")

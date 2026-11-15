@@ -18,7 +18,7 @@
 
 # main.py
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __app_name__ = "SplitCPY"
 __author__ = "jakequi (fork of DualCPY by the_swest)"
 __description__ = "Dual-screen scrcpy launcher for the AYN Thor and other handhelds"

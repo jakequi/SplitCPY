@@ -19,6 +19,7 @@
 # src/launcher.py
 
 import os
+import re
 import sys
 import time
 import ctypes
@@ -1617,6 +1618,8 @@ class Launcher:
                 self.scrcpy = new
 
                 new.start_scrcpy(serial=serial)
+                # FPS may have changed: 60 Hz only for streams at 60 fps or less
+                self._apply_thor_refresh()
                 self._volume_applied_pid = None
                 if self.controller_overlay:
                     self._start_overlay_listener()
@@ -1755,11 +1758,83 @@ class Launcher:
     def _apply_thor_screens_on_connect(self):
         """After connecting: undo a dim left over from a crash, then re-dim if wanted"""
         def worker():
+            # Also undoes / reapplies a 60 Hz switch left over from a crash
+            self._apply_thor_refresh()
             if self.config.get("thor_brightness_backup", None) and not self.thor_screens_off:
                 self._restore_thor_brightness()
             if self.thor_screens_off:
                 self._dim_thor()
         threading.Thread(target=worker, daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # Run the handheld's screens at 60 Hz while streaming
+    # ------------------------------------------------------------------
+    # With the Thor at 120 Hz, games (RetroArch measured at ~62.5 fps) hand
+    # frames to the encoder at uneven 8/16 ms intervals, and the 60 fps cap
+    # then throws real game frames away: 47-56 fps and stutter over USB,
+    # against a steady 58-60 at 60 Hz. So while a stream at 60 fps or less
+    # runs, both refresh settings (what AYN's Display setting writes) are
+    # set to 60. The previous values are saved first and put back on exit,
+    # or - after a crash - the next time SplitCPY connects.
+    REFRESH_KEYS = ("peak_refresh_rate", "min_refresh_rate")
+    STREAM_REFRESH_HZ = 60
+
+    def _want_60hz(self):
+        return (self.max_fps <= self.STREAM_REFRESH_HZ
+                and bool(self.config.get("stream_at_60hz", True)))
+
+    def _apply_thor_refresh(self):
+        """Call from a worker thread once a stream has started"""
+        try:
+            backup = self.config.get("thor_refresh_backup", None)
+            if not self._want_60hz():
+                if backup:
+                    self._restore_thor_refresh()
+                return
+            if not backup:
+                out = self._adb_shell("; ".join(f"settings get system {k}" for k in self.REFRESH_KEYS))
+                values = (out or "").split()
+                if len(values) != len(self.REFRESH_KEYS):
+                    logger.warning(f"Couldn't read the Thor's refresh rate ({out!r}) - leaving it alone")
+                    return
+
+                def above_60(v):
+                    try:
+                        return float(v) > self.STREAM_REFRESH_HZ + 0.5
+                    except ValueError:
+                        return False  # "null" = unset
+
+                if not any(above_60(v) for v in values):
+                    return  # already 60 Hz
+                backup = dict(zip(self.REFRESH_KEYS, values))
+                self.config.set("thor_refresh_backup", backup)
+                logger.info(f"Saved Thor refresh rate: {backup}")
+            hz = f"{self.STREAM_REFRESH_HZ:.1f}"
+            ok = self._adb_shell("; ".join(f"settings put system {k} {hz}" for k in self.REFRESH_KEYS)) is not None
+            logger.info(f"Thor screens set to {self.STREAM_REFRESH_HZ} Hz for streaming: {ok}")
+        except Exception as e:
+            logger.warning(f"Couldn't set the Thor's refresh rate: {e}")
+
+    def _restore_thor_refresh(self):
+        backup = self.config.get("thor_refresh_backup", None)
+        if not backup:
+            return True
+        cmds = []
+        for key in self.REFRESH_KEYS:
+            if key not in backup:
+                continue
+            value = str(backup[key])
+            if value != "null" and not re.fullmatch(r"[0-9]+(\.[0-9]+)?", value):
+                continue
+            cmds.append(f"settings delete system {key}" if value == "null"
+                        else f"settings put system {key} {value}")
+        ok = not cmds or self._adb_shell("; ".join(cmds)) is not None
+        if ok:
+            cfg = self.config.load()
+            cfg.pop("thor_refresh_backup", None)
+            self.config.save(cfg)
+            logger.info(f"Thor refresh rate restored: {backup}")
+        return ok
 
     def set_stream_options(self, options):
         """Set several stream options at once with a single stream restart"""
@@ -2222,6 +2297,7 @@ class Launcher:
             logger.error(f"Failed to restart scrcpy after profile switch: {e}")
             return
 
+        threading.Thread(target=self._apply_thor_refresh, daemon=True).start()
         self.save_layout()
         self.layout_windows(force=True)
 
@@ -2271,6 +2347,11 @@ class Launcher:
                 self._restore_thor_brightness()
         except Exception as e:
             logger.warning(f"Brightness restore on exit failed: {e}")
+        try:
+            if self.config.get("thor_refresh_backup", None):
+                self._restore_thor_refresh()
+        except Exception as e:
+            logger.warning(f"Refresh-rate restore on exit failed: {e}")
 
         # Shut down the bundled adb server so adb.exe doesn't linger in the
         # background and pile up across launches (upstream issue #11)
