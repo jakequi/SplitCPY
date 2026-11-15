@@ -1,5 +1,5 @@
-# DualCPY Split - dual-screen scrcpy launcher for the AYN Thor and other handhelds
-# Copyright (C) 2026 the_swest (original DualCPY) and DualCPY Split contributors
+# SplitCPY - dual-screen scrcpy launcher for the AYN Thor and other handhelds
+# Copyright (C) 2026 the_swest (original DualCPY) and SplitCPY contributors
 # Fork of https://github.com/theswest/DualCPY
 # Issues: https://github.com/jakequi/DualCPY-Split/issues
 #
@@ -222,7 +222,7 @@ def get_display_list(adb_bin, serial):
     return displays
 
 # ----------------------------------------------------------------------
-# Wireless quick-connect helpers (DualCPY Split)
+# Wireless quick-connect helpers (SplitCPY)
 # ----------------------------------------------------------------------
 def list_ready_devices(adb_bin):
     """Serials of devices in the 'device' state (authorised and online)"""

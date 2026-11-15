@@ -1,5 +1,5 @@
-# DualCPY Split - dual-screen scrcpy launcher for the AYN Thor and other handhelds
-# Copyright (C) 2026 the_swest (original DualCPY) and DualCPY Split contributors
+# SplitCPY - dual-screen scrcpy launcher for the AYN Thor and other handhelds
+# Copyright (C) 2026 the_swest (original DualCPY) and SplitCPY contributors
 # Fork of https://github.com/theswest/DualCPY
 # Issues: https://github.com/jakequi/DualCPY-Split/issues
 #
@@ -139,7 +139,7 @@ def make_font(size, weight="normal"):
 
 
 def apply_window_icon(window):
-    """Apply the DualCPY icon to any CTk window or Toplevel.
+    """Apply the SplitCPY icon to any CTk window or Toplevel.
 
     On Windows the titlebar icon is driven by ``wm_iconbitmap`` with an .ico
     file (``iconphoto`` alone is unreliable for the titlebar there). The catch

@@ -1,5 +1,5 @@
-# DualCPY Split - dual-screen scrcpy launcher for the AYN Thor and other handhelds
-# Copyright (C) 2026 the_swest (original DualCPY) and DualCPY Split contributors
+# SplitCPY - dual-screen scrcpy launcher for the AYN Thor and other handhelds
+# Copyright (C) 2026 the_swest (original DualCPY) and SplitCPY contributors
 # Fork of https://github.com/theswest/DualCPY
 # Issues: https://github.com/jakequi/DualCPY-Split/issues
 #
@@ -190,7 +190,7 @@ class FileTransferDialog:
     def _build_window(self):
         self.window = ctk.CTkToplevel(self.parent)
         self.window.withdraw()
-        self.window.title("File Transfer - DualCPY Split")
+        self.window.title("File Transfer - SplitCPY")
         self.window.configure(fg_color=BG_COLOUR)
         self.window.geometry(f"{DIALOG_WIDTH}x{DIALOG_HEIGHT}")
         self.window.minsize(PANE_MIN_WIDTH * 2 + 120, 520)
@@ -274,7 +274,7 @@ class FileTransferDialog:
             pass
 
         style.configure(
-            "DualCPY.Treeview",
+            "SplitCPY.Treeview",
             background=BG_COLOUR,
             fieldbackground=BG_COLOUR,
             foreground=TEXT_COLOUR,
@@ -285,7 +285,7 @@ class FileTransferDialog:
         )
 
         style.map(
-            "DualCPY.Treeview",
+            "SplitCPY.Treeview",
             background=[("selected", ACCENT_COLOUR)],
             foreground=[("selected", "#ffffff")],
         )
@@ -401,7 +401,7 @@ class FileTransferDialog:
             list_frame,
             show="tree",
             selectmode="extended",
-            style="DualCPY.Treeview",
+            style="SplitCPY.Treeview",
             yscrollcommand=sb.set,
         )
 
@@ -607,7 +607,7 @@ class FileTransferDialog:
     def _load_image_dev(self, remote, name):
         tmp = None
         try:
-            tmp = tempfile.mktemp(suffix=_ext(name), prefix="dualcpy_preview_")
+            tmp = tempfile.mktemp(suffix=_ext(name), prefix="splitcpy_preview_")
 
             rc, _, err = _run_adb(
                 self.adb_bin, self.serial,

@@ -1,5 +1,5 @@
-# DualCPY Split - Thor <-> PC link test
-# Copyright (C) 2026 the_swest and DualCPY Split contributors
+# SplitCPY - Thor <-> PC link test
+# Copyright (C) 2026 the_swest and SplitCPY contributors
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 CREATE_NO_WINDOW = 0x08000000
 PING_COUNT = 25
 TEST_FILE_MB = 16
-DEVICE_TEST_PATH = "/data/local/tmp/dualcpy_linktest.bin"
+DEVICE_TEST_PATH = "/data/local/tmp/splitcpy_linktest.bin"
 
 # Total video bitrate each profile needs over Wi-Fi at 60 FPS (Mbps, both screens),
 # from scrcpy_manager's WIRELESS_PROFILE. 120 FPS needs ~1.5x.
@@ -97,7 +97,7 @@ def measure(adb_bin, serial, progress=None):
 
     # 2) Throughput (device -> PC)
     step("Measuring speed...")
-    tmp_dir = tempfile.mkdtemp(prefix="dualcpy_")
+    tmp_dir = tempfile.mkdtemp(prefix="splitcpy_")
     src = os.path.join(tmp_dir, "up.bin")
     back = os.path.join(tmp_dir, "down.bin")
     try:

@@ -1,5 +1,5 @@
-# DualCPY Split - per-app volume
-# Copyright (C) 2026 the_swest and DualCPY Split contributors
+# SplitCPY - per-app volume
+# Copyright (C) 2026 the_swest and SplitCPY contributors
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by

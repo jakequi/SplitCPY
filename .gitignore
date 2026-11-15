@@ -41,3 +41,6 @@ build/
 
 # Misc
 notes.txt
+# Any log files / exported logs (contain device IPs, serials, paths)
+*.log
+exe logs/

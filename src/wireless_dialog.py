@@ -1,5 +1,5 @@
-# DualCPY Split - dual-screen scrcpy launcher for the AYN Thor and other handhelds
-# Copyright (C) 2026 the_swest (original DualCPY) and DualCPY Split contributors
+# SplitCPY - dual-screen scrcpy launcher for the AYN Thor and other handhelds
+# Copyright (C) 2026 the_swest (original DualCPY) and SplitCPY contributors
 # Fork of https://github.com/theswest/DualCPY
 # Issues: https://github.com/jakequi/DualCPY-Split/issues
 #
@@ -161,7 +161,7 @@ class WirelessConnectionDialog:
         ctk.CTkLabel(
             scroll,
             text=(
-                "Normally not needed - DualCPY finds paired devices by itself. Address is on "
+                "Normally not needed - SplitCPY finds paired devices by itself. Address is on "
                 "the Thor's Wireless debugging page."
             ),
             font=make_font(12),
@@ -203,7 +203,7 @@ class WirelessConnectionDialog:
 
         ctk.CTkLabel(
             scroll,
-            text=("On the Thor: Wireless debugging > Pair device with pairing code. DualCPY "
+            text=("On the Thor: Wireless debugging > Pair device with pairing code. SplitCPY "
                   "finds the address by itself - just type the 6-digit code and press Pair. "
                   "Tick \"Always allow on this network\" if asked."),
             font=make_font(12),
@@ -482,7 +482,7 @@ class WirelessConnectionDialog:
                 "Pairing Screen Not Found",
                 "Open the pairing screen on the Thor first:\n\n"
                 "Settings > Developer options > Wireless debugging > Pair device with pairing code\n\n"
-                "DualCPY fills in the address automatically when it appears.",
+                "SplitCPY fills in the address automatically when it appears.",
             )
             return
 
@@ -612,7 +612,7 @@ class WirelessConnectionDialog:
         return True
 
     def _finish_connected(self):
-        """Save the address and close straight away so DualCPY carries on"""
+        """Save the address and close straight away so SplitCPY carries on"""
         logger.info("Wireless connection established - closing dialog")
         self._on_close()
 
@@ -623,7 +623,7 @@ class WirelessConnectionDialog:
         if self._msgbox_yesno(
             "Disconnect Device?",
             f"Are you sure you want to disconnect from:\n\n{self.scrcpy_manager.serial}\n\n"
-            "You'll need to reconnect to use DualCPY wirelessly again.",
+            "You'll need to reconnect to use SplitCPY wirelessly again.",
         ):
             logger.info("Disconnecting wireless device")
             success = self.scrcpy_manager.disconnect_wireless()
@@ -639,7 +639,7 @@ class WirelessConnectionDialog:
                 self._msgbox_error(
                     "Disconnection Failed",
                     "Failed to disconnect the device.\n\n"
-                    "Try restarting DualCPY if the problem persists.",
+                    "Try restarting SplitCPY if the problem persists.",
                 )
 
     def _on_close(self):
@@ -655,16 +655,16 @@ class WirelessConnectionDialog:
         except Exception as e:
             logger.warning(f"Error destroying dialog: {e}")
 
-        # Bring the main DualCPY Control Panel window back to foreground
+        # Bring the main SplitCPY Control Panel window back to foreground
         try:
             user32 = ctypes.windll.user32
-            hwnd = user32.FindWindowW(None, "DualCPY Split Control Panel")
+            hwnd = user32.FindWindowW(None, "SplitCPY Control Panel")
             if hwnd:
                 user32.ShowWindow(hwnd, 9)
                 user32.SetForegroundWindow(hwnd)
-                logger.debug("Main DualCPY window brought to foreground")
+                logger.debug("Main SplitCPY window brought to foreground")
             else:
-                logger.debug("Could not find DualCPY Control Panel window")
+                logger.debug("Could not find SplitCPY Control Panel window")
         except Exception as e:
             logger.warning(f"Error bringing main window to foreground: {e}")
 
@@ -790,7 +790,7 @@ def wait_for_device(scrcpy_manager, config=None):
 
     load_calsans()
     win = ctk.CTk()
-    win.title("DualCPY Split")
+    win.title("SplitCPY")
     win.configure(fg_color=BG_COLOUR)
     w, h = 470, 300
     win.geometry(f"{w}x{h}+{(win.winfo_screenwidth() - w) // 2}+{(win.winfo_screenheight() - h) // 3}")

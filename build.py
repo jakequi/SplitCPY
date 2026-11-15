@@ -1,5 +1,5 @@
-# DualCPY Split - dual-screen scrcpy launcher for the AYN Thor and other handhelds
-# Copyright (C) 2026 the_swest (original DualCPY) and DualCPY Split contributors
+# SplitCPY - dual-screen scrcpy launcher for the AYN Thor and other handhelds
+# Copyright (C) 2026 the_swest (original DualCPY) and SplitCPY contributors
 # Fork of https://github.com/theswest/DualCPY
 # Issues: https://github.com/jakequi/DualCPY-Split/issues
 #
@@ -30,7 +30,7 @@ PyInstaller.__main__.run(
         "--onedir",
         "--noconsole",
         "--clean",
-        "--name=DualCPY-Split",
+        "--name=SplitCPY",
         "--add-data=bin;bin",
         "--add-data=assets/fonts;assets/fonts",
         "--add-data=assets/icon.png;assets",

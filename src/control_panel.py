@@ -1,5 +1,5 @@
-# DualCPY Split - dual-screen scrcpy launcher for the AYN Thor and other handhelds
-# Copyright (C) 2026 the_swest (original DualCPY) and DualCPY Split contributors
+# SplitCPY - dual-screen scrcpy launcher for the AYN Thor and other handhelds
+# Copyright (C) 2026 the_swest (original DualCPY) and SplitCPY contributors
 # Fork of https://github.com/theswest/DualCPY
 # Issues: https://github.com/jakequi/DualCPY-Split/issues
 #
@@ -90,7 +90,7 @@ def show_loading_screen():
 
     splash = ctk.CTk()
     splash.iconbitmap()
-    splash.title("DualCPY Split - Loading...")
+    splash.title("SplitCPY - Loading...")
 
     window_width = 480
     window_height = 190
@@ -106,7 +106,7 @@ def show_loading_screen():
 
     apply_window_icon(splash)
 
-    # Horizontal layout: DualCPY logo on the left, text block to its right.
+    # Horizontal layout: SplitCPY logo on the left, text block to its right.
     content = ctk.CTkFrame(splash, fg_color="transparent")
     content.pack(expand=True, padx=28)
 
@@ -127,7 +127,7 @@ def show_loading_screen():
 
     ctk.CTkLabel(
         title_frame,
-        text="Dual",
+        text="Split",
         font=make_font(45, "bold"),
         text_color=ACCENT_COLOUR,
     ).pack(side="left")
@@ -137,13 +137,6 @@ def show_loading_screen():
         text="CPY",
         font=make_font(45, "bold"),
         text_color=ACCENT2_COLOUR,
-    ).pack(side="left")
-
-    ctk.CTkLabel(
-        title_frame,
-        text=" Split",
-        font=make_font(45, "bold"),
-        text_color=TEXT_COLOUR,
     ).pack(side="left")
 
     ctk.CTkLabel(
@@ -207,7 +200,7 @@ class CTkUI:
 
         self.window = ctk.CTk()
         self.window.iconbitmap()
-        self.window.title("DualCPY Split Control Panel")
+        self.window.title("SplitCPY Control Panel")
         self.window.configure(fg_color=BG_COLOUR)
         self.window.minsize(360, 320)
 
@@ -357,7 +350,7 @@ class CTkUI:
 
         ctk.CTkLabel(
             title_row,
-            text="DualCPY Split",
+            text="SplitCPY",
             font=make_font(22, "bold"),
             text_color=TEXT_COLOUR,
         ).pack(side="left", padx=10)
@@ -431,14 +424,14 @@ class CTkUI:
                            color=ACCENT_COLOUR, is_float=False,
                            on_change=self._on_gap_change)
 
-        self._hint("The DualCPY window is always exactly the game area (no black bars): Both stacks "
+        self._hint("The SplitCPY window is always exactly the game area (no black bars): Both stacks "
                    "the screens, Top / Bottom show one screen. Fullscreen (F11) centres it on a black "
                    "background that OBS doesn't capture. Split = two separate windows. Fit = as big "
                    "as the monitor allows. Dim Thor screens = both handheld screens to minimum "
                    "brightness while you play on the monitor (restored afterwards).\n"
                    "Hotkeys (work in-game): Ctrl+Alt+1 Both, Ctrl+Alt+2 Top, Ctrl+Alt+3 Bottom, "
-                   "Ctrl+Alt+S cycle, Ctrl+Alt+F (or F11 when DualCPY is in front) fullscreen, Ctrl+Alt+M show/hide this menu, Ctrl+Alt+O dim Thor screens.\n"
-                   "OBS: Window Capture the \"DualCPY Split | ...\" window, then right-click it > Transform > "
+                   "Ctrl+Alt+S cycle, Ctrl+Alt+F (or F11 when SplitCPY is in front) fullscreen, Ctrl+Alt+M show/hide this menu, Ctrl+Alt+O dim Thor screens.\n"
+                   "OBS: Window Capture the \"SplitCPY | ...\" window, then right-click it > Transform > "
                    "Edit Transform > Bounding Box Type: \"Scale to inner bounds\", Alignment: Center. "
                    "Switching views is then seamless.")
 
@@ -952,7 +945,7 @@ class CTkUI:
             logger.debug(f"Panel height fit failed: {e}")
 
     def place_beside_stage(self):
-        """Put the panel flush against the DualCPY window (right side, else left)"""
+        """Put the panel flush against the SplitCPY window (right side, else left)"""
         try:
             hwnd = self.l.hwnd_container
             if not hwnd or self.l.fullscreen or not self.l.docked:

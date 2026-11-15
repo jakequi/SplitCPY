@@ -1,5 +1,5 @@
-# DualCPY Split - child process guard
-# Copyright (C) 2026 the_swest and DualCPY Split contributors
+# SplitCPY - child process guard
+# Copyright (C) 2026 the_swest and SplitCPY contributors
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -16,8 +16,8 @@
 
 # src/process_guard.py
 """
-Ties scrcpy / adb to DualCPY's lifetime with a Windows Job Object
-(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE). When DualCPY exits for ANY reason -
+Ties scrcpy / adb to SplitCPY's lifetime with a Windows Job Object
+(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE). When SplitCPY exits for ANY reason -
 normal close, crash, or being killed from Task Manager - Windows closes
 the job handle and terminates every process in it. No more scrcpy audio
 playing in the background or adb.exe left connected.
@@ -83,7 +83,7 @@ _self_in_job = False
 
 def init():
     """
-    Create the job and put DualCPY itself in it, so every process it starts
+    Create the job and put SplitCPY itself in it, so every process it starts
     (scrcpy, adb, and the adb server adb spawns) inherits the job.
     Safe to call more than once.
     """
@@ -110,7 +110,7 @@ def init():
 
 def adopt(popen):
     """
-    Add a child process to the job explicitly. Even when DualCPY itself is in
+    Add a child process to the job explicitly. Even when SplitCPY itself is in
     the job, some Pythons (e.g. the Microsoft Store build) let children escape
     it, so never rely on inheritance alone.
     """
@@ -125,7 +125,7 @@ def adopt(popen):
 
 
 def breakaway_flags():
-    """Creation flags for a process that must outlive DualCPY (e.g. app restart)."""
+    """Creation flags for a process that must outlive SplitCPY (e.g. app restart)."""
     return CREATE_BREAKAWAY_FROM_JOB if _self_in_job else 0
 
 
@@ -145,7 +145,7 @@ class _PROCESSENTRY32W(ctypes.Structure):
 def kill_stale(exe_path):
     """
     Close any process running `exe_path` (our bundled scrcpy.exe) left over
-    from an earlier DualCPY session - e.g. after a crash or Ctrl+C under a
+    from an earlier SplitCPY session - e.g. after a crash or Ctrl+C under a
     Python that lets children escape the job. Returns how many were closed.
     """
     import os

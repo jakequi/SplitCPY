@@ -1,5 +1,5 @@
-# DualCPY Split - dual-screen scrcpy launcher for the AYN Thor and other handhelds
-# Copyright (C) 2026 the_swest (original DualCPY) and DualCPY Split contributors
+# SplitCPY - dual-screen scrcpy launcher for the AYN Thor and other handhelds
+# Copyright (C) 2026 the_swest (original DualCPY) and SplitCPY contributors
 # Fork of https://github.com/theswest/DualCPY
 # Issues: https://github.com/jakequi/DualCPY-Split/issues
 #
@@ -738,11 +738,11 @@ class ScrcpyManager:
         return args
 
     def _window_titles(self):
-        # The process id makes the titles unique per DualCPY Split instance:
+        # The process id makes the titles unique per SplitCPY instance:
         # windows are found by title, and with shared titles a second running
         # copy adopted the first copy's streams (leaving it black)
         name = self.profile.name
-        tag = f"DualCPY Split {os.getpid()}"
+        tag = f"SplitCPY {os.getpid()}"
         return f"{name} - Top Screen - {tag}", f"{name} - Bottom Screen - {tag}"
 
     def _read_last_log(self):
@@ -790,7 +790,7 @@ class ScrcpyManager:
             WIRELESS_MAX_SIZE_TOP, profile.extra_scrcpy_args_top,
         )
         top_args = top_args + self.audio_args() + ["--gamepad=uhid"]
-        # Keep scrcpy's on-device cleanup for the top stream: if DualCPY turned
+        # Keep scrcpy's on-device cleanup for the top stream: if SplitCPY turned
         # the Thor's screen off, the device turns it back on by itself however
         # the stream ends (close, crash, Wi-Fi drop)
         top_args = [a for a in top_args if a != "--no-cleanup"]
@@ -866,7 +866,7 @@ class ScrcpyManager:
             "--window-title", window_title,
             "--max-size",     f"{int(max_size)}",
             "--max-fps",      str(max_fps_override if max_fps_override is not None else self.max_fps),
-            # Open off-screen and frameless: DualCPY pulls the window into its
+            # Open off-screen and frameless: SplitCPY pulls the window into its
             # own a moment later, so nothing flashes or jumps around on screen
             "--window-x=-30000", "--window-y=-30000", "--window-borderless",
             *(extra_args or []),

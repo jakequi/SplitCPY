@@ -1,11 +1,11 @@
-# DualCPY Split - live controller overlay (experimental)
-# Copyright (C) 2026 DualCPY Split contributors
+# SplitCPY - live controller overlay (experimental)
+# Copyright (C) 2026 SplitCPY contributors
 #
 # The input-event approach (adb `getevent -lq`, Thor key/axis maps, AYN
 # button = KEY_F24 on a separate gpio-keys node) and the overlay idea and
 # layout come from scrcpy-thor-ui by tommywaaf
 # (https://github.com/tommywaaf/scrcpy-thor-ui, GPL-3.0). Rendering was
-# rewritten with Pillow for DualCPY Split's stage layout.
+# rewritten with Pillow for SplitCPY's stage layout.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by

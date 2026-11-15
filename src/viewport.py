@@ -1,5 +1,5 @@
-# DualCPY Split - viewport windows
-# Copyright (C) 2026 the_swest and DualCPY Split contributors
+# SplitCPY - viewport windows
+# Copyright (C) 2026 the_swest and SplitCPY contributors
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -85,7 +85,7 @@ SWP_FRAMECHANGED = 0x0020
 BLACK_BRUSH = 4
 
 FULL_CROP = (0.0, 0.0, 1.0, 1.0)
-CLASS_NAME = "DualCPYViewport"
+CLASS_NAME = "SplitCPYViewport"
 
 
 class _WNDCLASSEX(ctypes.Structure):

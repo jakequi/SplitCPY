@@ -1,8 +1,8 @@
 <p align="center">
-  <img src=".github/icon.png" alt="DualCPY Split logo" height="96">
+  <img src=".github/icon.png" alt="SplitCPY logo" height="96">
 </p>
 
-<h1 align="center">DualCPY Split</h1>
+<h1 align="center">SplitCPY</h1>
 
 <p align="center">
   <em>Mirror both screens of the AYN Thor (and other dual-screen handhelds) to your PC -
@@ -10,7 +10,7 @@
 </p>
 
 > [!NOTE]
-> DualCPY Split is a fork of **[DualCPY](https://github.com/theswest/DualCPY)** by the_swest.
+> SplitCPY is a fork of **[DualCPY](https://github.com/theswest/DualCPY)** by the_swest.
 > It keeps DualCPY's foundations (scrcpy docking, device profiles, file transfer) and adds an
 > OBS-friendly stage, instant connecting, console aspect presets, audio fixes and much more -
 > see the [changelog](CHANGELOG.md).
@@ -21,9 +21,9 @@
 
 ## Download
 
-Grab **`DualCPY-Split-v1.0.0-windows.zip`** from the
+Grab **`SplitCPY-v1.0.0-windows.zip`** from the
 [latest release](https://github.com/jakequi/DualCPY-Split/releases/latest), unzip it anywhere
-and run **`DualCPY-Split.exe`**. scrcpy and adb are included - nothing else to install.
+and run **`SplitCPY.exe`**. scrcpy and adb are included - nothing else to install.
 `config/` and `logs/` are created next to the exe on first launch.
 
 ### Run from source
@@ -33,7 +33,7 @@ and run **`DualCPY-Split.exe`**. scrcpy and adb are included - nothing else to i
 4. `python main.py`
 
 ### Build the exe yourself
-`pip install pyinstaller`, then `python build.py` - the app is in `dist/DualCPY-Split/`.
+`pip install pyinstaller`, then `python build.py` - the app is in `dist/SplitCPY/`.
 
 ---
 
@@ -43,13 +43,13 @@ On the handheld:
 1. **Enable Developer options:** Settings > About device > tap *Build number* 7 times.
 2. **USB:** turn on *USB debugging*, plug in, tap **Allow**. Done.
 3. **Wi-Fi:** turn on *Wireless debugging* and tick **"Always allow on this network"**.
-   In DualCPY Split choose *Pair / Connect Manually*, then on the handheld open
-   *Wireless debugging > Pair device with pairing code* - DualCPY Split fills in the address,
+   In SplitCPY choose *Pair / Connect Manually*, then on the handheld open
+   *Wireless debugging > Pair device with pairing code* - SplitCPY fills in the address,
    you just type the 6-digit code. You only pair once.
 4. **Tip:** Developer options > *Quick settings developer tiles* > **Wireless debugging** puts a
    one-tap toggle in your quick settings.
 
-From then on, just open DualCPY Split. It finds the handheld on USB or Wi-Fi by itself (even after
+From then on, just open SplitCPY. It finds the handheld on USB or Wi-Fi by itself (even after
 a restart, even though Android changes the port) and opens straight into the streams. If Wireless
 debugging is off it waits and connects the moment you turn it on.
 
@@ -88,12 +88,12 @@ debugging is off it waits and connects the moment you turn it on.
 |---|---|
 | Ctrl+Alt+1 / 2 / 3 | View: Both / Top / Bottom |
 | Ctrl+Alt+S | Cycle views |
-| Ctrl+Alt+F, or F11 while DualCPY Split is in front | Fullscreen |
+| Ctrl+Alt+F, or F11 while SplitCPY is in front | Fullscreen |
 | Ctrl+Alt+M | Show / hide the control panel (also over fullscreen) |
 | Ctrl+Alt+O | Dim / restore the Thor's screens |
 
 ### OBS setup
-Add a **Window Capture** of the `DualCPY Split | <device>` window, then right-click it >
+Add a **Window Capture** of the `SplitCPY | <device>` window, then right-click it >
 *Transform > Edit Transform* > **Bounding Box Type: Scale to inner bounds**, **Alignment: Center**.
 Switching between Both / Top / Bottom is then seamless.
 
@@ -123,7 +123,7 @@ Suggestions and bug reports: [issues](https://github.com/jakequi/DualCPY-Split/i
 
 ## Bundled software & licences
 
-- DualCPY Split is licensed under the **GNU GPL v3.0** - see [LICENSE](LICENSE). You are free to
+- SplitCPY is licensed under the **GNU GPL v3.0** - see [LICENSE](LICENSE). You are free to
   modify and redistribute it under the same terms.
 - Includes **[scrcpy](https://github.com/Genymobile/scrcpy) v4.0** by Genymobile / Romain Vimont,
   unmodified, under the Apache License 2.0 ([bin/LICENSE_scrcpy.txt](bin/LICENSE_scrcpy.txt)).

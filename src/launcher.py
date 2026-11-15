@@ -1,5 +1,5 @@
-# DualCPY Split - dual-screen scrcpy launcher for the AYN Thor and other handhelds
-# Copyright (C) 2026 the_swest (original DualCPY) and DualCPY Split contributors
+# SplitCPY - dual-screen scrcpy launcher for the AYN Thor and other handhelds
+# Copyright (C) 2026 the_swest (original DualCPY) and SplitCPY contributors
 # Fork of https://github.com/theswest/DualCPY
 # Issues: https://github.com/jakequi/DualCPY-Split/issues
 #
@@ -132,7 +132,7 @@ WMSZ_TOPLEFT, WMSZ_TOPRIGHT = 4, 5
 
 class Launcher:
     """
-    Main window controller for DualCPY
+    Main window controller for SplitCPY
     Manages scrcpy instances, docking and undocking behabiour,
     UI rendering and event handling and configuration persistance
 
@@ -626,7 +626,7 @@ class Launcher:
             wc = WNDCLASSEX()
             wc.cbSize = ctypes.sizeof(WNDCLASSEX)
             wc.lpfnWndProc = ctypes.cast(self._wndproc, ctypes.c_void_p).value
-            wc.lpszClassName = "DualCPYBridge"
+            wc.lpszClassName = "SplitCPYBridge"
             hinst = self.kernel32.GetModuleHandleW(None)
             wc.hInstance = hinst
             wc.hbrBackground = ctypes.windll.gdi32.GetStockObject(BLACK_BRUSH)
@@ -701,12 +701,12 @@ class Launcher:
 
             # Build window title with device name if available
             device_label = getattr(self, "device_model", None) or "Unknown Device"
-            window_title = f"DualCPY Split | {device_label}"
+            window_title = f"SplitCPY | {device_label}"
 
             # Create the container window
             hwnd = self.user32.CreateWindowExW(
                 WS_EX_CONTROLPARENT,
-                "DualCPYBridge",
+                "SplitCPYBridge",
                 window_title,
                 style,
                 *self._initial_container_pos(),
@@ -740,7 +740,7 @@ class Launcher:
                 except Exception as e:
                     logger.error(f"Failed to create fullscreen backdrop: {e}", exc_info=True)
 
-                # F11 = fullscreen while a DualCPY window is in front
+                # F11 = fullscreen while a SplitCPY window is in front
                 try:
                     self._install_f11_hook()
                 except Exception as e:
@@ -1038,14 +1038,14 @@ class Launcher:
         wc = WNDCLASSEX()
         wc.cbSize = ctypes.sizeof(WNDCLASSEX)
         wc.lpfnWndProc = ctypes.cast(self._backdrop_proc, ctypes.c_void_p).value
-        wc.lpszClassName = "DualCPYBackdrop"
+        wc.lpszClassName = "SplitCPYBackdrop"
         wc.hInstance = hinst
         wc.hbrBackground = ctypes.windll.gdi32.GetStockObject(BLACK_BRUSH)
         self.user32.RegisterClassExW(ctypes.byref(wc))
         WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE = 0x00000080, 0x08000000
         self.user32.CreateWindowExW.restype = wintypes.HWND
         self.hwnd_backdrop = self.user32.CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, "DualCPYBackdrop", "DualCPY Backdrop",
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, "SplitCPYBackdrop", "SplitCPY Backdrop",
             WS_POPUP, 0, 0, 10, 10, None, None, ctypes.c_void_p(hinst), None,
         )
 
@@ -1121,7 +1121,7 @@ class Launcher:
                 apply_docked_style(child)
                 self.viewports.layout_inner(key, force=True)
 
-    def _dualcpy_in_front(self):
+    def _splitcpy_in_front(self):
         """Is the foreground window one of ours (stage, split window, panel, backdrop)?"""
         fg = self.user32.GetForegroundWindow()
         if not fg:
@@ -1141,7 +1141,7 @@ class Launcher:
     def _install_f11_hook(self):
         """
         Low-level keyboard hook for F11. Unlike a global hotkey it only acts
-        (and swallows the key) while DualCPY is in front, so F11 keeps working
+        (and swallows the key) while SplitCPY is in front, so F11 keeps working
         normally in browsers and everything else.
         """
         WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN, VK_F11 = 13, 0x0100, 0x0104, 0x7A
@@ -1159,7 +1159,7 @@ class Launcher:
             try:
                 if n_code == 0 and w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
                     kb = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
-                    if kb.vkCode == VK_F11 and self._dualcpy_in_front():
+                    if kb.vkCode == VK_F11 and self._splitcpy_in_front():
                         self.user32.PostMessageW(self.hwnd_container, WM_APP_TOGGLE_FULLSCREEN, 0, 0)
                         return 1  # swallow: don't also send F11 to the game
             except Exception:
@@ -1640,7 +1640,7 @@ class Launcher:
     #  - so both panels are set to minimum brightness (~2 nits) through
     #    DisplayManager.setBrightness(displayId) - what AYN's own slider does
     # The previous brightness of each panel is saved first and restored when
-    # switched off, on exit, or - after a crash - the next time DualCPY connects.
+    # switched off, on exit, or - after a crash - the next time SplitCPY connects.
 
     def _adb_shell(self, command, timeout=6):
         adb_bin = getattr(self.scrcpy, "adb_bin", None)
@@ -1724,7 +1724,7 @@ class Launcher:
         if "bottom_brightness" in backup:  # previous build: bottom only
             cmds.append(f"service call display {self.TX_SET_BRIGHTNESS} i32 "
                         f"{int(backup.get('display', 4))} f {float(backup['bottom_brightness']):.6f}")
-        # Older DualCPY Split builds saved settings values instead
+        # Older SplitCPY builds saved settings values instead
         legacy = ("screen_brightness_mode", "screen_brightness", "dual_screen_brightness_level")
         cmds += [f"settings put system {k} {v}" for k, v in backup.items() if k in legacy]
         ok = not cmds or self._adb_shell("; ".join(cmds)) is not None

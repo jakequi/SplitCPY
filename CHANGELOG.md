@@ -1,8 +1,8 @@
 # Changelog
 
-## DualCPY Split 1.0.0 - 15-11-2026
+## SplitCPY 1.0.0 - 15-11-2026
 
-First release of DualCPY Split, a fork of [DualCPY](https://github.com/theswest/DualCPY) 1.0.0 by the_swest.
+First release of SplitCPY, a fork of [DualCPY](https://github.com/theswest/DualCPY) 1.0.0 by the_swest.
 
 ### Added
 - **View: Both / Top / Bottom** - the combined window is always exactly the game area (no black bars for OBS to capture): Both stacks the screens, Top / Bottom show one screen. Switching keeps the window height; dragging the edges keeps the shape
@@ -19,7 +19,7 @@ First release of DualCPY Split, a fork of [DualCPY](https://github.com/theswest/
 - **Easier pairing**: open "Pair device with pairing code" on the Thor and DualCPY fills in the address - just type the 6-digit code
 - **Dim Thor screens** (switch or Ctrl+Alt+O): both handheld screens go to minimum brightness while you play on the monitor, through Android's per-display brightness (what AYN's own slider uses). Instant, no restart; each screen's brightness is restored when switched off, on exit, or after a crash on the next connect. (Powering panels off was tested and rejected: it blacks out or throttles the mirror to ~6 FPS, and the bottom panel ignores it)
 - **(i) buttons**: explanations in the control panel are hidden by default and shown per section
-- **Controller overlay (experimental)**: the Thor's controls drawn beside the bottom screen, lighting up live as you press them (read from the device over adb - nothing to install). Part of the stage window, so OBS captures it; the window widens just enough to fit. Idea, input handling and layout from [scrcpy-thor-ui](https://github.com/tommywaaf/scrcpy-thor-ui) by tommywaaf, rendering rewritten for DualCPY Split
+- **Controller overlay (experimental)**: the Thor's controls drawn beside the bottom screen, lighting up live as you press them (read from the device over adb - nothing to install). Part of the stage window, so OBS captures it; the window widens just enough to fit. Idea, input handling and layout from [scrcpy-thor-ui](https://github.com/tommywaaf/scrcpy-thor-ui) by tommywaaf, rendering rewritten for SplitCPY
 - **Renderer** setting: Direct3D 9 (default) or Direct3D 11 (can be smoother on Windows 11)
 - **Bottom FPS** setting: same as top, or 30 to free the Thor's GPU for the top screen
 - **F11** toggles fullscreen while DualCPY is in front (doesn't affect other apps)
@@ -34,7 +34,7 @@ First release of DualCPY Split, a fork of [DualCPY](https://github.com/theswest/
 - Split-mode screenshots (both windows stacked into one image)
 
 ### Changed
-- New DualCPY Split icon (app, taskbar, title bars, splash, README)
+- New SplitCPY icon (app, taskbar, title bars, splash, README)
 - Balanced latency now streams at full resolution and bitrate like Low - only the audio buffer is larger. Only Stable (for weak Wi-Fi) lowers resolution
 - Reorganised control panel (View / Aspect / Audio & Stream / Tools / Profiles / Settings); manual position sliders, size slider and layout presets replaced by the self-fitting stage and Profiles
 - Mouse wheel no longer changes slider values (it moved the volume while scrolling the panel)
@@ -47,8 +47,8 @@ First release of DualCPY Split, a fork of [DualCPY](https://github.com/theswest/
 ### Bugfixes
 - Bottom screen took ~15 s to appear after a stream restart (e.g. after changing a setting or Test Connection): the top window was adopted before the start-up check could see it, so the check waited for its full timeout
 - Blocky / soft picture after Test Connection picked Balanced on Wi-Fi (it also cut the stream to 1280x720 and 960x836)
-- Black screens when a second copy of DualCPY Split (or DualCPY) was already running: both copies found scrcpy windows by the same title, so the running copy took over the new copy's streams. Window titles are now unique per copy
-- Only one DualCPY Split runs at a time - opening it again brings the running one to the front (an app restart still works)
+- Black screens when a second copy of SplitCPY (or DualCPY) was already running: both copies found scrcpy windows by the same title, so the running copy took over the new copy's streams. Window titles are now unique per copy
+- Only one SplitCPY runs at a time - opening it again brings the running one to the front (an app restart still works)
 - Start-up: scrcpy windows open off-screen and are adopted within ~0.1 s (no flashing/jumping), and the control panel opens beside the stage instead of on top of it
 - Ctrl+Alt+M could hide the panel instead of showing it while fullscreen
 - Fullscreen / Split buttons are highlighted only while active

@@ -1,5 +1,5 @@
-# DualCPY Split - dual-screen scrcpy launcher for the AYN Thor and other handhelds
-# Copyright (C) 2026 the_swest (original DualCPY) and DualCPY Split contributors
+# SplitCPY - dual-screen scrcpy launcher for the AYN Thor and other handhelds
+# Copyright (C) 2026 the_swest (original DualCPY) and SplitCPY contributors
 # Fork of https://github.com/theswest/DualCPY
 # Issues: https://github.com/jakequi/DualCPY-Split/issues
 #
@@ -19,7 +19,7 @@
 # main.py
 
 __version__ = "1.0.0"
-__app_name__ = "DualCPY Split"
+__app_name__ = "SplitCPY"
 __author__ = "jakequi (fork of DualCPY by the_swest)"
 __description__ = "Dual-screen scrcpy launcher for the AYN Thor and other handhelds"
 
@@ -48,7 +48,7 @@ def setup_logging():
     )
     os.makedirs(log_dir, exist_ok=True)
 
-    log_file = os.path.join(log_dir, f"dualcpy_{time.strftime('%Y%m%d')}.log")
+    log_file = os.path.join(log_dir, f"splitcpy_{time.strftime('%Y%m%d')}.log")
 
     logging.basicConfig(
         level=logging.INFO,
@@ -79,8 +79,8 @@ def check_windows_version():
                 messagebox.showwarning(
                     "Windows 10 Detected - Known Issues",
                     f"WARNING: You are running Windows 10 (Build {build})\n\n"
-                    f"DualCPY has been reported to have stability issues on Windows 10.\n"
-                    f"Restarting DualCPY can sometimes fix small issues.\n"
+                    f"SplitCPY has been reported to have stability issues on Windows 10.\n"
+                    f"Restarting SplitCPY can sometimes fix small issues.\n"
                     f"For the best experience, please use Windows 11.\n\n"
                     f"Continue anyway?",
                 )
@@ -93,9 +93,9 @@ def check_windows_version():
                 print("=" * LOG_MULT)
                 print(f"You are running Windows 10 (Build {build})")
                 print("")
-                print("DualCPY has known stability issues on Windows 10.")
+                print("SplitCPY has known stability issues on Windows 10.")
                 print("")
-                print("Restarting DualCPY can sometimes fix small issues")
+                print("Restarting SplitCPY can sometimes fix small issues")
                 print("")
                 print("For the best experience, please use Windows 11.")
                 print("=" * LOG_MULT)
@@ -170,12 +170,12 @@ def check_runtime_structure():
 
 
 _instance_mutex = None
-SINGLE_INSTANCE_MUTEX = "Local\\DualCPYSplit.SingleInstance"
+SINGLE_INSTANCE_MUTEX = "Local\\SplitCPY.SingleInstance"
 
 
 def acquire_single_instance(wait_ms=4000):
     """
-    True if this is the only running DualCPY Split. Waits briefly so an app
+    True if this is the only running SplitCPY. Waits briefly so an app
     restart (old copy still shutting down) doesn't get turned away.
     The mutex is released by Windows when the process exits, however it exits.
     """
@@ -194,7 +194,7 @@ def acquire_single_instance(wait_ms=4000):
 def focus_existing_instance():
     """Bring the running copy's control panel (and stage) to the front"""
     user32 = ctypes.windll.user32
-    for title in ("DualCPY Split Control Panel",):
+    for title in ("SplitCPY Control Panel",):
         hwnd = user32.FindWindowW(None, title)
         if hwnd:
             user32.ShowWindow(hwnd, 9)  # SW_RESTORE
@@ -205,7 +205,7 @@ def focus_existing_instance():
 
 def main():
     """
-    DualCPY's main entry point
+    SplitCPY's main entry point
     Sets up logging, checks windows version, runs folder checks, sets DPI awareness,
     creates the launcher instance and starts the UI.
     """
@@ -266,10 +266,10 @@ def main():
     except Exception as PriorityErr:
         logger.warning(f"Could not raise host process priority: {PriorityErr}")
 
-    # Only one DualCPY Split at a time: two copies fight over the handheld,
+    # Only one SplitCPY at a time: two copies fight over the handheld,
     # the hotkeys and each other's scrcpy windows
     if not acquire_single_instance():
-        logger.info("DualCPY Split is already running - bringing it to the front")
+        logger.info("SplitCPY is already running - bringing it to the front")
         focus_existing_instance()
         return
 
