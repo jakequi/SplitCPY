@@ -315,3 +315,32 @@ def auto_connect_wireless(adb_bin, saved_ip=None, saved_port=None, timeout=6.0, 
         _time.sleep(0.4)
     logger.info("Auto-connect: no wireless device found")
     return None, None
+
+
+def mdns_pairing_services(adb_bin):
+    """[(instance_name, "ip:port")] of devices currently offering QR/code pairing"""
+    try:
+        result = subprocess.run(
+            [adb_bin, "mdns", "services"], capture_output=True, text=True,
+            timeout=ADB_INFO_TIMEOUT, creationflags=CREATE_NO_WINDOW,
+        )
+    except Exception as e:
+        logger.debug(f"adb mdns services failed: {e}")
+        return []
+    return re.findall(r"^(\S+)\s+_adb-tls-pairing\._tcp\.?\s+(\d+\.\d+\.\d+\.\d+:\d+)",
+                      result.stdout or "", flags=re.MULTILINE)
+
+
+def adb_pair(adb_bin, target, code, timeout=20):
+    """`adb pair ip:port code`; True on success"""
+    try:
+        result = subprocess.run(
+            [adb_bin, "pair", target, code], capture_output=True, text=True,
+            timeout=timeout, creationflags=CREATE_NO_WINDOW,
+        )
+        out = ((result.stdout or "") + (result.stderr or "")).strip()
+        logger.info(f"adb pair {target}: {out}")
+        return result.returncode == 0 and "success" in out.lower()
+    except Exception as e:
+        logger.info(f"adb pair {target} failed: {e}")
+        return False

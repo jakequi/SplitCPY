@@ -293,10 +293,23 @@ class CTkUI:
         return var
 
     def _hint(self, text):
-        lbl = ctk.CTkLabel(self._scroll, text=text, font=make_font(11),
+        """
+        Explanatory text for the current section. Hidden by default; the (i)
+        button next to the section title shows/hides it.
+        """
+        holder = tk.Frame(self._scroll, bg=BG_COLOUR, height=1)
+        holder.pack(fill="x", padx=16)
+        lbl = ctk.CTkLabel(holder, text=text, font=make_font(11),
                            text_color="#7d8494",
                            anchor="w", justify="left", wraplength=380)
-        lbl.pack(anchor="w", padx=16, pady=(0, 4))
+        sec = getattr(self, "_current_section", None)
+        if sec is not None:
+            sec["hints"].append((holder, lbl))
+            if not sec["btn_shown"]:
+                sec["btn"].pack(side="left", padx=(6, 0))
+                sec["btn_shown"] = True
+        else:
+            lbl.pack(anchor="w", pady=(0, 4))
         return lbl
 
     def _build_ui(self):
@@ -389,6 +402,13 @@ class CTkUI:
         self._dock_btn.grid(row=0, column=1, sticky="ew", padx=(4, 0))
         self._button(self._scroll, "Fit to Monitor", self._on_fit_to_monitor) \
             .pack(fill="x", padx=16, pady=(4, 2))
+        self._screens_off_var = tk.BooleanVar(value=self.l.thor_screens_off)
+        ctk.CTkSwitch(
+            self._scroll, text="Turn Thor screens off while streaming (Ctrl+Alt+O)",
+            variable=self._screens_off_var,
+            command=lambda: self.l.set_thor_screens_off(bool(self._screens_off_var.get())),
+            progress_color=ACCENT_COLOUR, text_color=TEXT_COLOUR, font=make_font(13),
+        ).pack(anchor="w", padx=16, pady=(6, 2))
 
         self._build_slider("screen_gap", "Gap", self.l.screen_gap, 0, 200,
                            color=ACCENT_COLOUR, is_float=False,
@@ -398,7 +418,7 @@ class CTkUI:
                    "the screens, Top / Bottom show one screen. Fullscreen centres it on a black "
                    "background that OBS doesn't capture.\n"
                    "Hotkeys (work in-game): Ctrl+Alt+1 Both, Ctrl+Alt+2 Top, Ctrl+Alt+3 Bottom, "
-                   "Ctrl+Alt+S cycle, Ctrl+Alt+F fullscreen, Ctrl+Alt+M show/hide this menu.\n"
+                   "Ctrl+Alt+S cycle, Ctrl+Alt+F fullscreen, Ctrl+Alt+M show/hide this menu, Ctrl+Alt+O Thor screens off/on.\n"
                    "OBS: Window Capture the \"DualCPY | ...\" window, then right-click it > Transform > "
                    "Edit Transform > Bounding Box Type: \"Scale to inner bounds\", Alignment: Center. "
                    "Switching views is then seamless.")
@@ -547,13 +567,34 @@ class CTkUI:
         ).pack(fill="x", padx=16, pady=10)
 
     def _section(self, label):
+        row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        row.pack(anchor="w", padx=16, pady=(4, 2))
         ctk.CTkLabel(
-            self._scroll,
+            row,
             text=label,
             font=make_font(14, "bold"),
             text_color=TEXT_COLOUR,
             anchor="w",
-        ).pack(anchor="w", padx=16, pady=(4, 2))
+        ).pack(side="left")
+        sec = {"hints": [], "open": False, "btn_shown": False}
+        sec["btn"] = ctk.CTkButton(
+            row, text="i", width=20, height=20, corner_radius=10,
+            fg_color=BORDER_COLOUR, hover_color=ACCENT_COLOUR,
+            text_color=TEXT_COLOUR, font=make_font(11, "bold"),
+            command=lambda: self._toggle_hints(sec),
+        )
+        self._current_section = sec
+        self.__dict__.setdefault("_sections", []).append((label, sec))
+
+    def _toggle_hints(self, sec):
+        sec["open"] = not sec["open"]
+        for holder, lbl in sec["hints"]:
+            if sec["open"]:
+                lbl.pack(anchor="w", pady=(0, 4))
+            else:
+                lbl.pack_forget()
+                holder.configure(height=1)  # collapse the empty holder
+        sec["btn"].configure(fg_color=ACCENT_COLOUR if sec["open"] else BORDER_COLOUR)
 
     def _build_slider(
         self, attr, label, initial_val,
@@ -1125,6 +1166,7 @@ class CTkUI:
             self._set_aspect_display("bottom", self.l.bottom_aspect)
             from src.scrcpy_manager import QUALITY_LABELS
             self._quality_var.set(QUALITY_LABELS.get(self.l.quality, "High"))
+            self._screens_off_var.set(self.l.thor_screens_off)
             self._fps_var.set(fps_label(self.l.max_fps))
             self._audio_var.set(AUDIO_MODE_LABELS.get(self.l.audio_mode, "PC"))
             self._latency_var.set(AUDIO_LATENCY_LABELS.get(self.l.audio_latency, "Low"))

@@ -18,8 +18,10 @@
 # src/wireless_dialog.py
 
 import re
+import time
 import ctypes
 import logging
+import threading
 import customtkinter as ctk
 
 from src.win32_darkmode import enable_dark_titlebar
@@ -42,7 +44,7 @@ DEFAULT_CONNECT_PORT = "5555"
 
 # Dialog window dimensions
 DIALOG_WIDTH = 600
-DIALOG_HEIGHT = 680
+DIALOG_HEIGHT = 760
 DIALOG_MIN_HEIGHT = 580
 
 
@@ -84,6 +86,7 @@ class WirelessConnectionDialog:
 
         self._create_widgets()
         self._load_inputs()
+        self._start_pair_discovery()
 
         self.dialog.protocol("WM_DELETE_WINDOW", self._on_close)
         self.dialog.deiconify()
@@ -152,13 +155,13 @@ class WirelessConnectionDialog:
         self._separator(scroll)
 
         # Quick Connect
-        self._section(scroll, "Already Paired? Quick Connect")
+        self._section(scroll, "Already Paired? Connect by Address")
 
         ctk.CTkLabel(
             scroll,
             text=(
-                "If you've already paired your device, enter the IP and port shown in:\n"
-                "Settings -> Developer Options -> Wireless Debugging"
+                "Normally not needed - DualCPY finds paired devices by itself. Address is on "
+                "the Thor's Wireless debugging page."
             ),
             font=make_font(12),
             text_color=BORDER_COLOUR,
@@ -195,16 +198,13 @@ class WirelessConnectionDialog:
         self._separator(scroll)
 
         # First-time Pairing
-        self._section(scroll, "First Time? Pair Your Device")
+        self._section(scroll, "New Device? Pair Once")
 
         ctk.CTkLabel(
             scroll,
-            text=(
-                "Follow these steps on your AYN Thor:\n\n"
-                "1. Go to: Settings -> System -> Developer Options -> Wireless Debugging\n"
-                "2. Tap on 'Pair device with pairing code'\n"
-                "3. Enter the IP Address, Port, and 6-digit code shown below"
-            ),
+            text=("On the Thor: Wireless debugging > Pair device with pairing code. DualCPY "
+                  "finds the address by itself - just type the 6-digit code and press Pair. "
+                  "Tick \"Always allow on this network\" if asked."),
             font=make_font(12),
             text_color=BORDER_COLOUR,
             anchor="w",
@@ -474,6 +474,17 @@ class WirelessConnectionDialog:
         port_str     = self.pair_port_entry.get().strip()
         pairing_code = self.pair_code_entry.get().strip()
 
+        if (not ip or not port_str) and getattr(self, "_pair_found", None):
+            ip, port_str = self._pair_found.rsplit(":", 1)
+        if not ip or not port_str:
+            self._msgbox_error(
+                "Pairing Screen Not Found",
+                "Open the pairing screen on the Thor first:\n\n"
+                "Settings > Developer options > Wireless debugging > Pair device with pairing code\n\n"
+                "DualCPY fills in the address automatically when it appears.",
+            )
+            return
+
         if not self._validate_ip(ip):
             self._msgbox_error(
                 "Invalid IP Address",
@@ -548,6 +559,41 @@ class WirelessConnectionDialog:
             except Exception:
                 pass
 
+    # ------------------------------------------------------------ pairing discovery
+    def _start_pair_discovery(self):
+        """Fill in the pairing address/port as soon as the Thor's pairing screen is open"""
+        self._pair_found = None
+        self._discovering = True
+
+        def worker():
+            from src.device_detection import mdns_pairing_services
+            while self._discovering:
+                services = mdns_pairing_services(self.scrcpy_manager.adb_bin)
+                if services:
+                    self._pair_found = services[0][1]
+                time.sleep(1.5)
+
+        threading.Thread(target=worker, daemon=True).start()
+        self.dialog.after(500, self._pair_discovery_poll)
+
+    def _pair_discovery_poll(self):
+        if not self._discovering:
+            return
+        try:
+            found = self._pair_found
+            if found:
+                ip, port = found.rsplit(":", 1)
+                if self.pair_address_entry.get().strip() != ip or self.pair_port_entry.get().strip() != port:
+                    self._set_entry(self.pair_address_entry, ip)
+                    self._set_entry(self.pair_port_entry, port)
+                    self.status_label.configure(
+                        text=f"Found the Thor's pairing screen at {found} - type the code and press Pair",
+                        text_color=SUCCESS_COLOUR)
+                    self.pair_code_entry.focus_set()
+            self.dialog.after(700, self._pair_discovery_poll)
+        except Exception:
+            pass  # dialog closed
+
     def _connect_via_discovery(self, ip, timeout=4.0):
         """Find the device's current wireless-debugging port and connect to it"""
         from src.device_detection import auto_connect_wireless
@@ -597,6 +643,7 @@ class WirelessConnectionDialog:
 
     def _on_close(self):
         """Save inputs, release modal grab, then destroy the dialog."""
+        self._discovering = False
         self._save_inputs()
         try:
             self.dialog.grab_release()
@@ -726,3 +773,115 @@ def show_wireless_dialog(parent=None, scrcpy_manager=None, config=None):
         return None
     dialog = WirelessConnectionDialog(parent, scrcpy_manager, config=config)
     return dialog.show()
+
+# ----------------------------------------------------------------------
+# Start-up: wait for the handheld instead of asking for details
+# ----------------------------------------------------------------------
+def wait_for_device(scrcpy_manager, config=None):
+    """
+    Small window shown at start-up when no device is connected yet. It keeps
+    looking (USB, or a paired device on Wi-Fi - whatever port it's on now) and
+    continues by itself the moment one appears, e.g. after tapping the
+    Wireless debugging tile on the Thor. Returns the serial, or None if the
+    user quits.
+    """
+    from src.device_detection import auto_connect_wireless
+
+    load_calsans()
+    win = ctk.CTk()
+    win.title("DualCPY Split")
+    win.configure(fg_color=BG_COLOUR)
+    w, h = 470, 300
+    win.geometry(f"{w}x{h}+{(win.winfo_screenwidth() - w) // 2}+{(win.winfo_screenheight() - h) // 3}")
+    win.resizable(False, False)
+    apply_window_icon(win)
+
+    ctk.CTkLabel(win, text="Looking for your Thor...", font=make_font(20, "bold"),
+                 text_color=TEXT_COLOUR).pack(pady=(26, 6))
+    status = ctk.CTkLabel(win, text="Searching USB and Wi-Fi", font=make_font(12), text_color="#7d8494")
+    status.pack()
+    ctk.CTkLabel(
+        win,
+        text=("Turn on Wireless debugging on the Thor - it connects automatically.\n"
+              "Tip: add it to Quick Settings for one tap: Developer options >\n"
+              "Quick settings developer tiles > Wireless debugging."),
+        font=make_font(12), text_color=TEXT_COLOUR, justify="center",
+    ).pack(pady=(14, 14))
+
+    holder = {"serial": None, "quit": False, "target": None}
+    stop = threading.Event()
+
+    def search():
+        saved_ip = config.get("wireless_connect_ip", None) if config else None
+        saved_port = config.get("wireless_connect_port", None) if config else None
+        while not stop.is_set():
+            serial, target = auto_connect_wireless(scrcpy_manager.adb_bin, saved_ip, saved_port, timeout=3.0)
+            if serial:
+                holder["serial"], holder["target"] = serial, target
+                return
+            stop.wait(1.0)
+
+    threading.Thread(target=search, daemon=True).start()
+
+    def manual():
+        stop.set()
+        result = show_wireless_dialog(win, scrcpy_manager, config=config)
+        if result == "connected" and scrcpy_manager.serial:
+            holder["serial"] = scrcpy_manager.serial
+            win.quit()
+            return
+        # Back to waiting
+        stop.clear()
+        threading.Thread(target=search, daemon=True).start()
+
+    def quit_():
+        holder["quit"] = True
+        stop.set()
+        win.quit()
+
+    row = ctk.CTkFrame(win, fg_color="transparent")
+    row.pack()
+    ctk.CTkButton(row, text="Pair / Connect Manually", command=manual,
+                  fg_color=ACCENT_COLOUR, hover_color=ACCENT2_COLOUR,
+                  font=make_font(13)).pack(side="left", padx=6)
+    ctk.CTkButton(row, text="Quit", command=quit_, width=80,
+                  fg_color=PANEL_COLOUR, hover_color=BORDER_COLOUR,
+                  font=make_font(13)).pack(side="left", padx=6)
+    win.protocol("WM_DELETE_WINDOW", quit_)
+
+    dots = [0]
+
+    def tick():
+        if holder["serial"]:
+            win.quit()
+            return
+        dots[0] = (dots[0] + 1) % 4
+        status.configure(text="Searching USB and Wi-Fi" + "." * dots[0])
+        win.after(400, tick)
+
+    win.after(400, tick)
+    try:
+        win.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
+        enable_dark_titlebar(hwnd)
+    except Exception:
+        pass
+    win.mainloop()
+    stop.set()
+    try:
+        win.destroy()
+    except Exception:
+        pass
+
+    if holder["serial"] and holder["target"] and config:
+        try:
+            ip, port = holder["target"].rsplit(":", 1)
+            cfg = config.load()
+            cfg["wireless_connect_ip"], cfg["wireless_connect_port"] = ip, port
+            config.save(cfg)
+        except Exception:
+            pass
+    if holder["serial"]:
+        scrcpy_manager.serial = holder["serial"]
+        scrcpy_manager.connection_mode = "wireless" if scrcpy_manager.is_wireless else "usb"
+    return holder["serial"]

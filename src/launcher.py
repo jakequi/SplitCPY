@@ -35,7 +35,7 @@ from src.config import ConfigManager
 from src.scrcpy_manager import ScrcpyManager
 from src.device_profile import BUILTIN_PROFILES
 from src.win32_darkmode import enable_dark_titlebar
-from src.wireless_dialog import show_wireless_dialog
+from src.wireless_dialog import show_wireless_dialog, wait_for_device
 from src.device_selector import show_device_selector
 from src.custom_profile_store import CustomProfileStore
 from src.control_panel import show_loading_screen, CTkUI
@@ -106,6 +106,7 @@ HOTKEYS = {
     4: (ord("S"), "cycle"),
     5: (ord("F"), "fullscreen"),
     6: (ord("M"), "menu"),
+    7: (ord("O"), "screens"),
 }
 WS_POPUP = 0x80000000
 WS_MAXIMIZEBOX = 0x00010000
@@ -168,6 +169,7 @@ class Launcher:
         self.audio_mode = self.config.get("audio_mode", "pc")
         self.audio_latency = self.config.get("audio_latency", "low")
         self.quality = self.config.get("quality", "high")
+        self.thor_screens_off = bool(self.config.get("thor_screens_off", False))
         # Visible region of each screen (PC-side crop, no restart needed)
         self.top_aspect = self._normalise_aspect(self.config.get("top_aspect", FULL_SCREEN_LABEL))
         self.bottom_aspect = self._normalise_aspect(self.config.get("bottom_aspect", FULL_SCREEN_LABEL))
@@ -319,6 +321,7 @@ class Launcher:
             audio_latency=self.audio_latency,
             crops=self.crops,
             quality=self.quality,
+            screens_off=self.thor_screens_off,
         )
 
     def _apply_default_layout(self):
@@ -854,6 +857,12 @@ class Launcher:
 
     def _on_hotkey(self, hk_id):
         action = HOTKEYS.get(hk_id, (None, None))[1]
+        if action == "screens":
+            self.set_thor_screens_off(not self.thor_screens_off)
+            ui = getattr(self, "ui", None)
+            if ui:
+                self.ui_calls.put(ui._sync_sliders_from_launcher)
+            return
         if action == "menu":
             ui = getattr(self, "ui", None)
             if ui:
@@ -1119,6 +1128,7 @@ class Launcher:
             "audio_mode": self.audio_mode,
             "audio_latency": self.audio_latency,
             "quality": self.quality,
+            "thor_screens_off": self.thor_screens_off,
             "max_fps": self.max_fps,
             "stage_height": self.stage_height,
             "split": not self.docked,
@@ -1129,7 +1139,7 @@ class Launcher:
         if not data or not self.scrcpy:
             return
         restart = False
-        for key in ("audio_mode", "audio_latency", "quality"):
+        for key in ("audio_mode", "audio_latency", "quality", "thor_screens_off"):
             if key in data and data[key] != getattr(self, key):
                 setattr(self, key, data[key])
                 self.config.set(key, data[key])
@@ -1405,6 +1415,11 @@ class Launcher:
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def set_thor_screens_off(self, off):
+        """Turn the handheld's screens off/on (applied with a quick stream restart)"""
+        self.set_stream_options({"thor_screens_off": bool(off)})
+        self._notify("Thor screens " + ("off" if off else "on") + " - restarting streams...", "info")
+
     def set_stream_options(self, options):
         """Set several stream options at once with a single stream restart"""
         changed = False
@@ -1573,6 +1588,7 @@ class Launcher:
                 adb_bin,
                 saved_ip=self.config.get("wireless_connect_ip", None),
                 saved_port=self.config.get("wireless_connect_port", None),
+                timeout=2.5,
             )
             if serial and target:
                 ip, port = target.rsplit(":", 1)
@@ -1585,30 +1601,18 @@ class Launcher:
             if serial:
                 logger.info(f"Wireless auto-connect succeeded: {serial}")
 
-        # Still nothing: ask, then show the wireless dialog
+        # Still nothing: wait for it (connects by itself the moment the Thor's
+        # Wireless debugging comes on); pairing/manual connect from there
         if not serial:
-            logger.info("No device found on boot - opening the wireless connection dialog")
-            response = True  # go straight to the dialog; closing it exits
-
-            if response:
-                # The dialog requires ScrcpyManager to function.
-                # We give it a temporary default profile just to work properly
-                default_boot_profile = BUILTIN_PROFILES.get("ayn_thor") or list(BUILTIN_PROFILES.values())[0]
-                self.scrcpy = ScrcpyManager(profile=default_boot_profile, scale=self.launch_scale, max_fps=self.max_fps)
-
-                result = show_wireless_dialog(self._tk_root, self.scrcpy, config=self.config)
-
-                if result == 'connected':
-                    serial = self.scrcpy.serial
-                    logger.info(f"Connected wirelessly to {serial}")
-                else:
-                    logger.info("No wireless connection established")
-                    self.stop()
-                    return
-            else:
-                logger.info("User chose to exit")
+            logger.info("No device found on boot - waiting for one")
+            default_boot_profile = BUILTIN_PROFILES.get("ayn_thor") or list(BUILTIN_PROFILES.values())[0]
+            self.scrcpy = ScrcpyManager(profile=default_boot_profile, scale=self.launch_scale, max_fps=self.max_fps)
+            serial = wait_for_device(self.scrcpy, config=self.config)
+            if not serial:
+                logger.info("No device - user quit")
                 self.stop()
                 return
+            logger.info(f"Device ready: {serial}")
 
         if self._tk_root is None:
             _hidden = _ctk.CTk()
