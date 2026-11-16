@@ -118,7 +118,7 @@ Suggestions and bug reports: [issues](https://github.com/jakequi/SplitCPY/issues
 - **Black or flickering screens:** Display (this PC) > Renderer > Direct3D 9 (this also turns off hardware decoding).
 - **Handheld not found:** check USB debugging / Wireless debugging is on and both devices are on
   the same network; *Pair / Connect Manually* in the waiting window lets you pair again.
-- **Logs:** `logs/dualcpy_<date>.log` and per-stream `logs/scrcpy_*.log` next to the app.
+- **Logs:** `logs/splitcpy_<date>.log` and per-stream `logs/scrcpy_*.log` next to the app.
 
 ---
 
@@ -126,8 +126,12 @@ Suggestions and bug reports: [issues](https://github.com/jakequi/SplitCPY/issues
 
 - SplitCPY is licensed under the **GNU GPL v3.0** - see [LICENSE](LICENSE). You are free to
   modify and redistribute it under the same terms.
-- Includes **[scrcpy](https://github.com/Genymobile/scrcpy) v4.0** by Genymobile / Romain Vimont,
-  unmodified, under the Apache License 2.0 ([bin/LICENSE_scrcpy.txt](bin/LICENSE_scrcpy.txt)).
+- Includes **[scrcpy](https://github.com/Genymobile/scrcpy) v5.0.1** by Genymobile / Romain Vimont,
+  unmodified, under the Apache License 2.0 ([bin/LICENSE_scrcpy.txt](bin/LICENSE_scrcpy.txt)),
+  with the libraries its Windows release ships (SDL, FFmpeg, adb, libusb) under their own licences.
+- scrcpy's **[SDL](https://www.libsdl.org/)** library (zlib licence) is included as `bin/SDL3_real.dll`;
+  `bin/SDL3.dll` is SplitCPY's own small pass-through that adds the Sharp scaling option
+  (source in [native/sdl_scale_proxy](native/sdl_scale_proxy)).
 - UI font **[Cal Sans](https://github.com/calcom/font)**, SIL Open Font License 1.1
   ([assets/fonts/OFL.txt](assets/fonts/OFL.txt)).
 
