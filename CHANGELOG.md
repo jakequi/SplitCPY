@@ -1,5 +1,25 @@
 # Changelog
 
+## SplitCPY 1.1.0 - 16-11-2026
+
+### Changed
+- **scrcpy 5.0.1** (from 4.0): the PC now decodes the video on the graphics card (D3D11VA) - scrcpy reports ~10x less CPU - including H.265 (fixed for Windows in 5.0.1), plus improved video buffering. Hardware decoding needs the Direct3D 11 renderer, which is now the default for new setups (a renderer you already chose is kept). A **Hardware decoding** switch (Display) turns it off if a graphics driver misbehaves
+
+### Added
+- **Stats overlay** (Misc Settings, off by default): live FPS of each screen, codec, bitrate and the connection (USB, or Wi-Fi with its round-trip time) in the corner of the stream; toggle with **Ctrl+Alt+I**. Click-through, never takes focus, and isn't recorded by OBS Window Capture
+- **Scaling** (Display): Smooth (as before) or Sharp (nearest-neighbour, hard pixel edges). scrcpy has no option for this, so SplitCPY ships a small pass-through `SDL3.dll` (source in `native/sdl_scale_proxy`) that sets the filter on scrcpy's video texture; the real SDL is `bin/SDL3_real.dll`
+- **Video codec: H.265 (experimental)** (Stream): more detail than H.264 at the same bitrate. Tested on the AYN Thor's hardware HEVC encoder at 1080p 60 FPS
+- **VSync: Auto / On / Off** (Display): Auto keeps 1.0.1's behaviour (on for 100 Hz+ monitors); On / Off force it
+- **Video buffer: Off / 50 ms / 100 ms** (Display): holds frames briefly and plays them out evenly, hiding short Wi-Fi hitches for that much extra delay (sound is delayed to match). For slower games; keep Off for precision platformers
+- **Collapsible control panel**: click a section title to fold it away; SplitCPY remembers which are folded. The picture options (Scaling, VSync, Renderer, Hardware decoding) have their own **Display (this PC)** section and Settings is now **Misc Settings**
+- **Opens centred, without jumping**: the stream and the control panel open side by side, centred on the monitor as a pair. The stream window is created in its final spot and the panel stays invisible until it's sized and placed, instead of both appearing elsewhere and moving a few seconds later
+- **Faster start-up, one loading screen**: the loading screen now stays up (with the current step: looking for the device, starting streams, opening) until SplitCPY is actually on screen, and searches for the handheld while it's showing instead of waiting a fixed 2 s first. The pause before starting scrcpy is 0.2 s instead of 1 s, and the Wi-Fi lock is set up in the background
+- **Enter confirms in the Wireless window**: Enter in the address / port boxes presses Connect Now, and in the pairing boxes presses Pair Device
+
+### Fixed
+- **Stopping a stream no longer kills other apps' background helpers on the handheld**: the cleanup ran `pkill -f app_process`, which also ended e.g. the Cocoon launcher's `AynGameObserver`; it now only ends scrcpy's server
+- **Wi-Fi lock can't get stuck on**: SplitCPY sends the helper a heartbeat every 3 s and the helper quits by itself after 15 s without one, so a connection that dies silently (PC loses power, router drops) no longer leaves the handheld's Wi-Fi power save off. Any leftover helper is also ended when a new stream starts, not only when one stops
+
 ## SplitCPY 1.0.1 - 15-11-2026
 
 ### Fixed

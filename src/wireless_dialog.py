@@ -245,6 +245,15 @@ class WirelessConnectionDialog:
         )
         self.pair_btn.pack(pady=(8, 12))
 
+        # Enter in a box presses that section's button (invoke() does nothing
+        # while the button is disabled, e.g. during a connection attempt)
+        for entries, button in (
+                ((self.ip_entry, self.port_entry), self.connect_btn),
+                ((self.pair_address_entry, self.pair_port_entry, self.pair_code_entry), self.pair_btn)):
+            for entry in entries:
+                for key in ("<Return>", "<KP_Enter>"):
+                    entry.bind(key, lambda _e, b=button: (b.invoke(), "break")[1])
+
         self._separator(scroll)
 
         # Bottom actions

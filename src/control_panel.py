@@ -21,6 +21,7 @@
 import os
 import sys
 import time
+import threading
 import ctypes
 import logging
 import win32clipboard
@@ -55,7 +56,6 @@ STATUS_MESSAGE_DURATION = 2.0
 ERROR_STATUS_DURATION = 3.0
 PRESET_CACHE_TIME = 0.5
 UPDATE_INTERVAL_MS = 16
-LOADING_SCREEN_DURATION = 2000
 
 # Misc
 DEFAULT_PRESET_NAME = "NewPreset"
@@ -79,96 +79,6 @@ def fps_label(fps):
 
 
 # Loading screen
-def show_loading_screen():
-    """
-    Shows a brief splash screen centered dynamically on the user's monitor.
-    """
-    logger.info("Showing loading screen")
-    load_calsans()
-    ctk.set_appearance_mode("dark")
-    ctk.set_default_color_theme("blue")
-
-    splash = ctk.CTk()
-    splash.iconbitmap()
-    splash.title("SplitCPY - Loading...")
-
-    window_width = 480
-    window_height = 190
-    screen_width = splash.winfo_screenwidth()
-    screen_height = splash.winfo_screenheight()
-    center_x = (screen_width - window_width) // 2
-    center_y = (screen_height - window_height) // 2.5
-
-    splash.geometry(f"{window_width}x{window_height}+{center_x}+{center_y}")
-
-    splash.resizable(False, False)
-    splash.configure(fg_color=BG_COLOUR)
-
-    apply_window_icon(splash)
-
-    # Horizontal layout: SplitCPY logo on the left, text block to its right.
-    content = ctk.CTkFrame(splash, fg_color="transparent")
-    content.pack(expand=True, padx=28)
-
-    try:
-        logo_ctk = ctk.CTkImage(Image.open(ICON_PATH), size=(96, 96))
-        logo_lbl = ctk.CTkLabel(content, image=logo_ctk, text="")
-        logo_lbl._logo_ref = logo_ctk  # keep a reference so it isn't GC'd
-        logo_lbl.pack(side="left", padx=(0, 22))
-    except Exception as e:
-        logger.warning(f"Splash logo failed to load: {e}")
-
-    # Text block sits to the right of the logo, left-aligned within itself.
-    text_block = ctk.CTkFrame(content, fg_color="transparent")
-    text_block.pack(side="left")
-
-    title_frame = ctk.CTkFrame(text_block, fg_color="transparent")
-    title_frame.pack(anchor="w")
-
-    ctk.CTkLabel(
-        title_frame,
-        text="Split",
-        font=make_font(45, "bold"),
-        text_color=ACCENT_COLOUR,
-    ).pack(side="left")
-
-    ctk.CTkLabel(
-        title_frame,
-        text="CPY",
-        font=make_font(45, "bold"),
-        text_color=ACCENT2_COLOUR,
-    ).pack(side="left")
-
-    ctk.CTkLabel(
-        text_block,
-        text="Starting up...",
-        font=make_font(22),
-        text_color=TEXT_COLOUR,
-    ).pack(anchor="w")
-
-    def _after_idle():
-        try:
-            splash.update_idletasks()
-            hwnd = ctypes.windll.user32.GetParent(splash.winfo_id())
-            if not hwnd:
-                hwnd = splash.winfo_id()
-            enable_dark_titlebar(hwnd)
-        except Exception:
-            pass
-
-        # Clean shutdown sequence
-        def _close_safely():
-            splash.quit()
-            splash.destroy()
-
-        splash.after(LOADING_SCREEN_DURATION, _close_safely)
-
-    splash.after(50, _after_idle)
-    splash.mainloop()
-    logger.info("Loading screen closed")
-
-
-# Main UI
 class CTkUI:
     """
     Main control panel
@@ -199,6 +109,13 @@ class CTkUI:
         ctk.set_default_color_theme("blue")
 
         self.window = ctk.CTk()
+        # Invisible until fit_height() has sized and placed it beside the
+        # stream (shown by _reveal), so it never pops up in the wrong spot
+        try:
+            self.window.attributes("-alpha", 0.0)
+        except Exception:
+            pass
+        self.window.after(2000, self._reveal)   # safety net
         self.window.iconbitmap()
         self.window.title("SplitCPY Control Panel")
         self.window.configure(fg_color=BG_COLOUR)
@@ -276,7 +193,7 @@ class CTkUI:
 
     def _dropdown(self, parent, label, values, current, command):
         """Labelled option menu row; returns the StringVar"""
-        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row = tk.Frame(parent, bg=BG_COLOUR, bd=0, highlightthickness=0)
         row.pack(fill="x", padx=16, pady=3)
         row.columnconfigure(1, weight=1)
         ctk.CTkLabel(row, text=label, font=make_font(13), text_color=TEXT_COLOUR,
@@ -336,9 +253,21 @@ class CTkUI:
         )
         self._scroll.pack(fill="both", expand=True)
         self._scroll.columnconfigure(0, weight=1)
+        # customtkinter scrolls 1 unit per 1/6 wheel notch; at 1 px a unit that
+        # was 20 px a notch (~37 notches for the whole panel). 3 px = ~60 px.
+        try:
+            self._scroll._parent_canvas.configure(yscrollincrement=3)
+        except Exception:
+            pass
+        # _section() points self._scroll at each section's body while building
+        self._root_scroll = self._scroll
+        try:
+            self._collapsed_sections = set(self.l.config.get("collapsed_sections", []) or [])
+        except Exception:
+            self._collapsed_sections = set()
 
         # Title bar
-        title_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        title_row = tk.Frame(self._scroll, bg=BG_COLOUR, bd=0, highlightthickness=0)
         title_row.pack(fill="x", padx=16, pady=(10, 0))
 
         try:
@@ -372,12 +301,12 @@ class CTkUI:
         self._status_label.pack(anchor="w", padx=16, pady=(0, 0))
 
         # -------------------------------------------------------- View
-        self._separator(pady=(4, 8))
+        self._separator(pady=(2, 4))
         self._section("View")
 
         # View selector: three equal columns, the same grid as the
         # Fullscreen / Split / Fit row below so the buttons line up
-        view_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        view_row = tk.Frame(self._scroll, bg=BG_COLOUR, bd=0, highlightthickness=0)
         view_row.pack(fill="x", padx=16, pady=(4, 6))
         self._view_btns = {}
         for col, (label, key) in enumerate(self._view_label_to_key.items()):
@@ -391,7 +320,7 @@ class CTkUI:
             b.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 3, 0 if col == 2 else 3))
             self._view_btns[key] = b
 
-        row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        row = tk.Frame(self._scroll, bg=BG_COLOUR, bd=0, highlightthickness=0)
         row.pack(fill="x", padx=16, pady=(0, 4))
         for c in range(3):
             row.columnconfigure(c, weight=1, uniform="view")
@@ -430,7 +359,7 @@ class CTkUI:
                    "as the monitor allows. Dim Thor screens = both handheld screens to minimum "
                    "brightness while you play on the monitor (restored afterwards).\n"
                    "Hotkeys (work in-game): Ctrl+Alt+1 Both, Ctrl+Alt+2 Top, Ctrl+Alt+3 Bottom, "
-                   "Ctrl+Alt+S cycle, Ctrl+Alt+F (or F11 when SplitCPY is in front) fullscreen, Ctrl+Alt+M show/hide this menu, Ctrl+Alt+O dim Thor screens.\n"
+                   "Ctrl+Alt+S cycle, Ctrl+Alt+F (or F11 when SplitCPY is in front) fullscreen, Ctrl+Alt+M show/hide this menu, Ctrl+Alt+O dim Thor screens, Ctrl+Alt+I stats overlay.\n"
                    "OBS: Window Capture the \"SplitCPY | ...\" window, then right-click it > Transform > "
                    "Edit Transform > Bounding Box Type: \"Scale to inner bounds\", Alignment: Center. "
                    "Switching views is then seamless.")
@@ -469,7 +398,13 @@ class CTkUI:
             self._scroll, "Bottom FPS", ["Same as top", "30 FPS"],
             "30 FPS" if self.l.bottom_fps == 30 else "Same as top",
             lambda v: self._on_stream_option("bottom_fps", 30 if v.startswith("30") else 0))
-        test_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        from src.scrcpy_manager import VIDEO_CODECS, VIDEO_CODEC_LABELS
+        self._codec_label_to_key = {VIDEO_CODEC_LABELS[k]: k for k in VIDEO_CODECS}
+        self._codec_var = self._dropdown(
+            self._scroll, "Video codec", [VIDEO_CODEC_LABELS[k] for k in VIDEO_CODECS],
+            VIDEO_CODEC_LABELS.get(self.l.video_codec, "H.264"),
+            lambda v: self._on_stream_option("video_codec", self._codec_label_to_key[v]))
+        test_row = tk.Frame(self._scroll, bg=BG_COLOUR, bd=0, highlightthickness=0)
         test_row.pack(fill="x", padx=16, pady=(4, 0))
         test_row.columnconfigure(0, weight=1)
         test_row.columnconfigure(1, weight=1)
@@ -485,8 +420,60 @@ class CTkUI:
                    "it uses ~1.5x the bandwidth. OBS still records at its own rate (usually 60).\n"
                    "Bottom FPS - 30 frees the Thor's GPU for the top screen when the bottom is "
                    "mostly menus (3DS, many Android games); keep 'Same' for DS games.\n"
+                   "Video codec - H.265 keeps more detail at the same bitrate (scanlines, dark scenes) "
+                   "but uses a bit more PC power to decode. Experimental: switch back to H.264 if "
+                   "the stream won't start or stutters.\n"
                    "Test Connection checks the Wi-Fi between the handheld and this PC (your internet "
                    "speed doesn't matter) and sets Quality and Latency for you (~10 s).\n"
+                   "Changing these restarts the streams (a second or two).")
+
+        # -------------------------------------------------------- Display
+        self._separator()
+        self._section("Display (this PC)")
+        from src.scrcpy_manager import (SCALE_FILTERS, SCALE_FILTER_LABELS,
+                                        VSYNC_MODES, VSYNC_LABELS,
+                                        VIDEO_BUFFERS, VIDEO_BUFFER_LABELS,
+                                        RENDER_DRIVERS, RENDER_DRIVER_LABELS)
+        self._scale_label_to_key = {SCALE_FILTER_LABELS[k]: k for k in SCALE_FILTERS}
+        self._scale_var = self._dropdown(
+            self._scroll, "Scaling", [SCALE_FILTER_LABELS[k] for k in SCALE_FILTERS],
+            SCALE_FILTER_LABELS.get(self.l.scale_filter, "Smooth"),
+            lambda v: self._on_stream_option("scale_filter", self._scale_label_to_key[v]))
+        self._vsync_label_to_key = {VSYNC_LABELS[k]: k for k in VSYNC_MODES}
+        self._vsync_var = self._dropdown(
+            self._scroll, "VSync", [VSYNC_LABELS[k] for k in VSYNC_MODES],
+            VSYNC_LABELS.get(self.l.vsync, "Auto"),
+            lambda v: self._on_stream_option("vsync", self._vsync_label_to_key[v]))
+        self._buffer_label_to_key = {VIDEO_BUFFER_LABELS[k]: k for k in VIDEO_BUFFERS}
+        self._buffer_var = self._dropdown(
+            self._scroll, "Video buffer", [VIDEO_BUFFER_LABELS[k] for k in VIDEO_BUFFERS],
+            VIDEO_BUFFER_LABELS.get(self.l.video_buffer, "Off"),
+            lambda v: self._on_stream_option("video_buffer", self._buffer_label_to_key[v]))
+        self._renderer_label_to_key = {RENDER_DRIVER_LABELS[k]: k for k in RENDER_DRIVERS}
+        self._renderer_var = self._dropdown(
+            self._scroll, "Renderer", [RENDER_DRIVER_LABELS[k] for k in RENDER_DRIVERS],
+            RENDER_DRIVER_LABELS.get(self.l.render_driver, "Direct3D 11"),
+            lambda v: self._on_stream_option("render_driver", self._renderer_label_to_key[v]))
+        self._hwdec_var = tk.BooleanVar(value=self.l.hw_decode)
+        ctk.CTkSwitch(
+            self._scroll, text="Hardware decoding (graphics card)",
+            variable=self._hwdec_var,
+            command=lambda: self._on_stream_option("hw_decode", bool(self._hwdec_var.get())),
+            progress_color=ACCENT_COLOUR, text_color=TEXT_COLOUR, font=make_font(13),
+        ).pack(anchor="w", padx=16, pady=(6, 2))
+        self._hint("How this PC shows the stream.\n"
+                   "Scaling - Smooth softens the picture when it's enlarged; Sharp keeps hard pixel "
+                   "edges (best for pixel-art games, can look jagged on 3D games and text).\n"
+                   "VSync - waits for the monitor's refresh: no tearing (most visible in fullscreen) "
+                   "for at most one refresh of delay. Auto = on for 100 Hz+ monitors, off for 60 Hz.\n"
+                   "Video buffer - holds frames briefly and plays them out evenly, hiding short Wi-Fi "
+                   "hitches, but adds that much delay all the time (50 ms = 3 frames at 60 FPS). Good "
+                   "for slower games; keep Off for platformers, fighting and rhythm games. Sound is "
+                   "delayed to match.\n"
+                   "Renderer - Direct3D 11 (default) is needed for hardware decoding; switch to "
+                   "Direct3D 9 only if you see black or flickering screens.\n"
+                   "Hardware decoding - the graphics card decodes the video (much less CPU). Turn off "
+                   "if the picture glitches, freezes or shows green blocks.\n"
                    "Changing these restarts the streams (a second or two).")
 
         # -------------------------------------------------------- Audio
@@ -510,7 +497,7 @@ class CTkUI:
         # -------------------------------------------------------- Tools
         self._separator()
         self._section("Tools")
-        grid = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        grid = tk.Frame(self._scroll, bg=BG_COLOUR, bd=0, highlightthickness=0)
         grid.pack(fill="x", padx=16, pady=(4, 4))
         grid.columnconfigure(0, weight=1)
         grid.columnconfigure(1, weight=1)
@@ -528,7 +515,7 @@ class CTkUI:
         self._section("Profiles")
         self._hint("Save your whole setup (view, aspect, gap, volume, audio, latency, FPS, "
                    "split/combined). The default profile (\u2605) loads automatically on start-up.")
-        save_row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        save_row = tk.Frame(self._scroll, bg=BG_COLOUR, bd=0, highlightthickness=0)
         save_row.pack(fill="x", padx=16, pady=4)
         save_row.columnconfigure(0, weight=1)
         self._profile_name_var = tk.StringVar(value="")
@@ -547,9 +534,9 @@ class CTkUI:
         self._profile_list.columnconfigure(0, weight=1)
         self.refresh_profile_list()
 
-        # -------------------------------------------------------- Settings
+        # -------------------------------------------------------- Misc Settings
         self._separator()
-        self._section("Settings")
+        self._section("Misc Settings")
         self._device_profiles_var = tk.BooleanVar(value=self.l.device_profiles_enabled)
         ctk.CTkSwitch(
             self._scroll, text="Device profiles (other handhelds / custom screen setups)",
@@ -562,21 +549,25 @@ class CTkUI:
             variable=self._overlay_var,
             command=lambda: self.l.set_controller_overlay(bool(self._overlay_var.get())),
             progress_color=ACCENT_COLOUR, text_color=TEXT_COLOUR, font=make_font(13),
+        ).pack(anchor="w", padx=16, pady=(2, 2))
+        self._stats_var = tk.BooleanVar(value=self.l.stats_overlay)
+        ctk.CTkSwitch(
+            self._scroll, text="Stats overlay (FPS, codec, bitrate, connection)",
+            variable=self._stats_var,
+            command=lambda: self.l.set_stats_overlay(bool(self._stats_var.get())),
+            progress_color=ACCENT_COLOUR, text_color=TEXT_COLOUR, font=make_font(13),
         ).pack(anchor="w", padx=16, pady=(2, 4))
-        from src.scrcpy_manager import RENDER_DRIVERS, RENDER_DRIVER_LABELS
-        self._renderer_label_to_key = {RENDER_DRIVER_LABELS[k]: k for k in RENDER_DRIVERS}
-        self._renderer_var = self._dropdown(
-            self._scroll, "Renderer (experimental)", [RENDER_DRIVER_LABELS[k] for k in RENDER_DRIVERS],
-            RENDER_DRIVER_LABELS.get(self.l.render_driver, "Direct3D 9"),
-            lambda v: self._on_stream_option("render_driver", self._renderer_label_to_key[v]))
         self._hint("Device profiles - off: always uses the built-in AYN Thor profile and never asks "
                    "which device you have (applies next launch).\n"
                    "Controller overlay - draws the Thor's buttons and sticks beside the bottom "
                    "screen, lighting up live as you press them (Both / Bottom view). Great for "
                    "streams; the window widens to fit it.\n"
-                   "Renderer - Direct3D 11 may be smoother on some PCs; switch back to Direct3D 9 "
-                   "if you see black or flickering screens.")
-        ctk.CTkFrame(self._scroll, fg_color="transparent", height=16).pack()
+                   "Stats overlay (Ctrl+Alt+I) - live FPS of each screen, codec, bitrate and USB / "
+                   "Wi-Fi delay in the corner of the stream. Not recorded by OBS Window Capture.")
+        # Back to the scroll area itself (see _section)
+        self._scroll = self._root_scroll
+        self._current_section = None
+        tk.Frame(self._scroll, bg=BG_COLOUR, height=6).pack()
         self._apply_device_profiles_state()
 
         self._refresh_view_buttons()
@@ -613,30 +604,67 @@ class CTkUI:
             logger.debug(f"View button refresh failed: {e}")
 
     # Layout helpers
-    def _separator(self, pady=10):
+    def _separator(self, pady=8):
+        # Always between sections, so it never collapses with one
         ctk.CTkFrame(
-            self._scroll, height=1, fg_color=BORDER_COLOUR
+            self._root_scroll, height=1, fg_color=BORDER_COLOUR
         ).pack(fill="x", padx=16, pady=pady)
 
     def _section(self, label):
-        row = ctk.CTkFrame(self._scroll, fg_color="transparent")
-        row.pack(anchor="w", padx=16, pady=(4, 2))
-        ctk.CTkLabel(
-            row,
-            text=label,
-            font=make_font(14, "bold"),
-            text_color=TEXT_COLOUR,
-            anchor="w",
-        ).pack(side="left")
-        sec = {"hints": [], "open": False, "btn_shown": False}
+        """
+        Collapsible section: a clickable header ("v View") and a body frame.
+        Widgets created after this call go into the body, because self._scroll
+        points at it until the next section (restored at the end of _build_ui).
+        """
+        root = self._root_scroll
+        row = tk.Frame(root, bg=BG_COLOUR, bd=0, highlightthickness=0)
+        row.pack(fill="x", padx=16, pady=(4, 2))
+        collapsed = label in self._collapsed_sections
+        sec = {"hints": [], "open": False, "btn_shown": False, "label": label, "row": row}
+        sec["header"] = ctk.CTkButton(
+            row, text=self._section_title(label, collapsed), anchor="w",
+            fg_color="transparent", hover_color=PANEL_COLOUR,
+            text_color=TEXT_COLOUR, font=make_font(14, "bold"),
+            width=10, height=24, corner_radius=6,
+            command=lambda: self._toggle_section(sec),
+        )
+        sec["header"].pack(side="left")
         sec["btn"] = ctk.CTkButton(
             row, text="i", width=20, height=20, corner_radius=10,
             fg_color=BORDER_COLOUR, hover_color=ACCENT_COLOUR,
             text_color=TEXT_COLOUR, font=make_font(11, "bold"),
             command=lambda: self._toggle_hints(sec),
         )
+        # A plain Tk frame: a CTkFrame is a canvas that customtkinter redraws
+        # after scrolling, so large ones left parts of the panel blank
+        body = tk.Frame(root, bg=BG_COLOUR, bd=0, highlightthickness=0)
+        sec["body"] = body
+        sec["collapsed"] = collapsed
+        if not collapsed:
+            body.pack(fill="x", after=row)
+        self._scroll = body
         self._current_section = sec
         self.__dict__.setdefault("_sections", []).append((label, sec))
+
+    @staticmethod
+    def _section_title(label, collapsed):
+        return ("▸  " if collapsed else "▾  ") + label
+
+    def _toggle_section(self, sec):
+        sec["collapsed"] = not sec["collapsed"]
+        if sec["collapsed"]:
+            sec["body"].pack_forget()
+            self._collapsed_sections.add(sec["label"])
+        else:
+            sec["body"].pack(fill="x", after=sec["row"])
+            self._collapsed_sections.discard(sec["label"])
+        sec["header"].configure(text=self._section_title(sec["label"], sec["collapsed"]))
+        # Grow / shrink the panel to the new content height
+        self.window.after_idle(lambda: self.fit_height(place=False))
+        try:
+            self.l.config.set("collapsed_sections", sorted(self._collapsed_sections))
+        except Exception:
+            pass
 
     def _toggle_hints(self, sec):
         sec["open"] = not sec["open"]
@@ -659,7 +687,7 @@ class CTkUI:
         The row registers itself in self._slider_refs so preset loads can
         push new values back without re-building widgets.
         """
-        row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        row = tk.Frame(self._scroll, bg=BG_COLOUR, bd=0, highlightthickness=0)
         row.pack(fill="x", padx=16, pady=3)
         row.columnconfigure(1, weight=1)   # slider column expands
 
@@ -813,7 +841,7 @@ class CTkUI:
             return
         for name in sorted(profiles, key=str.lower):
             is_default = name == self.l.default_setup
-            row = ctk.CTkFrame(self._profile_list, fg_color="transparent")
+            row = tk.Frame(self._profile_list, bg=PANEL_COLOUR, bd=0, highlightthickness=0)
             row.pack(fill="x", padx=6, pady=3)
             row.columnconfigure(1, weight=1)
             ctk.CTkButton(
@@ -887,6 +915,8 @@ class CTkUI:
         if data:
             self.l.apply_setup(data)
             self._sync_sliders_from_launcher()
+            # The profile may have changed the stream's size: re-centre the pair
+            self.window.after(300, self.centre_with_stage)
             self.show_status(f"Loaded default profile: {name}", "success", duration=4.0)
 
     def _on_device_profiles_toggle(self):
@@ -915,10 +945,12 @@ class CTkUI:
         windll.user32.GetWindowRect(hwnd, ctypes.byref(r))
         return r
 
-    def fit_height(self):
+    def fit_height(self, place=True):
         """
-        Open tall enough to show every option without scrolling; if the
-        monitor can't comfortably fit that, use 90% of its usable height.
+        Make the panel exactly as tall as its content, so nothing needs
+        scrolling (customtkinter tears while scrolling); capped at the
+        monitor's usable height. place=True (start-up) also centres it with
+        the stream and shows it; folding a section calls it with place=False.
         """
         try:
             from src.win32_dock import monitor_work_area, frame_insets
@@ -934,8 +966,8 @@ class CTkUI:
             il, it, ir, ib = frame_insets(style, ex)
             avail = work[3] - work[1]
             outer_h = need_client + it + ib
-            if outer_h > avail * 0.95:
-                outer_h = int(avail * 0.9)
+            if outer_h > avail:
+                outer_h = avail
             r = wintypes.RECT()
             windll.user32.GetWindowRect(me, ctypes.byref(r))
             y = max(work[1], min(r.top, work[3] - outer_h))
@@ -943,6 +975,33 @@ class CTkUI:
             logger.info(f"Panel height fitted: {outer_h}px (content {need_client}px, screen {avail}px)")
         except Exception as e:
             logger.debug(f"Panel height fit failed: {e}")
+        finally:
+            if place:
+                self.centre_with_stage()
+                self._reveal()
+
+    def _reveal(self):
+        """Show the panel, and close the start-up splash now SplitCPY is on screen"""
+        try:
+            if self.window.attributes("-alpha") < 1.0:
+                self.window.attributes("-alpha", 1.0)
+            # Tk leaves the window "layered" after an alpha change, and Windows
+            # then draws its child widgets through a slower path: controls
+            # lagged behind and looked unloaded while scrolling. Make it a
+            # normal window again.
+            me = windll.user32.GetParent(self.window.winfo_id()) or self.window.winfo_id()
+            ex = windll.user32.GetWindowLongW(me, -20)
+            # (WS_EX_COMPOSITED would double-buffer it, but it sends Tk into an
+            # endless repaint loop - tested, the panel froze)
+            new_ex = ex & ~0x00080000
+            if new_ex != ex:
+                windll.user32.SetWindowLongW(me, -20, new_ex)
+                # RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN
+                windll.user32.RedrawWindow(me, None, None, 0x0001 | 0x0004 | 0x0400 | 0x0080)
+        except Exception:
+            pass
+        from src import splash
+        splash.close()
 
     def place_beside_stage(self):
         """Put the panel flush against the SplitCPY window (right side, else left)"""
@@ -973,6 +1032,48 @@ class CTkUI:
             windll.user32.SetWindowPos(me, 0, vx - bl, vy - bt, 0, 0, 0x0001 | 0x0004 | 0x0010)
         except Exception as e:
             logger.debug(f"Panel placement failed: {e}")
+
+    def centre_with_stage(self):
+        """
+        Centre the stream window and this panel together on the stream's
+        monitor: [ stream ][ panel ], the pair centred horizontally, each
+        centred vertically. Falls back to place_beside_stage() when the pair
+        is too wide for the monitor (or the stream is fullscreen / split).
+        """
+        try:
+            hwnd = self.l.hwnd_container
+            if not hwnd or self.l.fullscreen or not self.l.docked:
+                return
+            from src.win32_dock import monitor_work_area
+            work = monitor_work_area(hwnd)
+            if not work:
+                return
+            self.window.update_idletasks()
+            me = windll.user32.GetParent(self.window.winfo_id()) or self.window.winfo_id()
+
+            def borders(h):
+                """(visible rect, left/top offset of the visible edge from the outer rect)"""
+                vis = self._visible_rect(h)
+                outer = wintypes.RECT()
+                windll.user32.GetWindowRect(h, ctypes.byref(outer))
+                return vis, vis.left - outer.left, vis.top - outer.top
+
+            stage, sl, st = borders(hwnd)
+            panel, pl, pt = borders(me)
+            sw, sh = stage.right - stage.left, stage.bottom - stage.top
+            pw, ph = panel.right - panel.left, panel.bottom - panel.top
+            work_w, work_h = work[2] - work[0], work[3] - work[1]
+            if sw + pw > work_w:
+                self.place_beside_stage()
+                return
+            x0 = work[0] + (work_w - sw - pw) // 2
+            sy = work[1] + max(0, (work_h - sh) // 2)
+            py = work[1] + max(0, (work_h - ph) // 2)
+            flags = 0x0001 | 0x0004 | 0x0010   # NOSIZE | NOZORDER | NOACTIVATE
+            windll.user32.SetWindowPos(hwnd, 0, x0 - sl, sy - st, 0, 0, flags)
+            windll.user32.SetWindowPos(me, 0, x0 + sw - pl, py - pt, 0, 0, flags)
+        except Exception as e:
+            logger.debug(f"Centring stream + panel failed: {e}")
 
     def toggle_panel(self):
         """Ctrl+Alt+M: bring the menu up over the stream (even fullscreen), or hide it"""
@@ -1058,7 +1159,7 @@ class CTkUI:
         and scrolls with the mouse wheel, by dragging, or with the scrollbar.
         """
         from src.scrcpy_manager import aspect_short
-        row = ctk.CTkFrame(self._scroll, fg_color="transparent")
+        row = tk.Frame(self._scroll, bg=BG_COLOUR, bd=0, highlightthickness=0)
         row.pack(fill="x", padx=16, pady=3)
         row.columnconfigure(2, weight=1)
         ctk.CTkLabel(row, text=label, font=make_font(13), text_color=TEXT_COLOUR,

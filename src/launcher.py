@@ -40,7 +40,8 @@ from src.win32_darkmode import enable_dark_titlebar
 from src.wireless_dialog import show_wireless_dialog, wait_for_device
 from src.device_selector import show_device_selector
 from src.custom_profile_store import CustomProfileStore
-from src.control_panel import show_loading_screen, CTkUI
+from src.control_panel import CTkUI
+from src import splash
 from src.device_profile_editor import DeviceProfileEditorDialog
 from src.win32_dock import (
     Win32Dock, monitor_work_area, monitor_rect, frame_insets, apply_docked_style,
@@ -88,6 +89,8 @@ DEFAULT_MAX_FPS = 60
 # Container window initial position
 DEFAULT_CONTAINER_X = 100
 DEFAULT_CONTAINER_Y = 100
+# Control panel width (logical px, before Windows display scaling)
+PANEL_WIDTH = 460
 
 # Timing constants
 SCRCPY_POLL_INTERVAL = 0.1
@@ -112,6 +115,7 @@ HOTKEYS = {
     5: (ord("F"), "fullscreen"),
     6: (ord("M"), "menu"),
     7: (ord("O"), "screens"),
+    8: (ord("I"), "stats"),
 }
 WS_POPUP = 0x80000000
 # Controller overlay: width of each side strip relative to the bottom screen's height
@@ -179,7 +183,15 @@ class Launcher:
         self.audio_latency = self.config.get("audio_latency", "low")
         self.quality = self.config.get("quality", "high")
         self.thor_screens_off = bool(self.config.get("thor_screens_off", False))
-        self.render_driver = self.config.get("render_driver", "direct3d")
+        self.render_driver = self.config.get("render_driver", "direct3d11")
+        self.video_codec = self.config.get("video_codec", "h264")
+        self.scale_filter = self.config.get("scale_filter", "linear")
+        self.hw_decode = bool(self.config.get("hw_decode", True))
+        self.vsync = self.config.get("vsync", "auto")
+        self.video_buffer = int(self.config.get("video_buffer", 0) or 0)
+        # Stats overlay (FPS / codec / bitrate / connection), off by default
+        self.stats_overlay = bool(self.config.get("stats_overlay", False))
+        self._stats = None
         # Live controller overlay beside the bottom screen (experimental)
         self.controller_overlay = bool(self.config.get("controller_overlay", False))
         self.overlay_strips = None          # {"left": (x,y,w,h), "right": ...} client coords
@@ -343,6 +355,11 @@ class Launcher:
             quality=self.quality,
             render_driver=self.render_driver,
             bottom_fps=self.bottom_fps,
+            video_codec=self.video_codec,
+            scale_filter=self.scale_filter,
+            hw_decode=self.hw_decode,
+            vsync=self.vsync,
+            video_buffer=self.video_buffer,
         )
 
     def _apply_default_layout(self):
@@ -710,7 +727,7 @@ class Launcher:
                 "SplitCPYBridge",
                 window_title,
                 style,
-                *self._initial_container_pos(),
+                *self._initial_container_pos(rect.right - rect.left, rect.bottom - rect.top),
                 rect.right - rect.left,
                 rect.bottom - rect.top,
                 None,
@@ -903,6 +920,18 @@ class Launcher:
             ui = getattr(self, "ui", None)
             if ui:
                 self.ui_calls.put(ui._sync_sliders_from_launcher)
+            return
+        if action == "stats":
+            ui = getattr(self, "ui", None)
+
+            def toggle_stats():
+                self.set_stats_overlay(not self.stats_overlay)
+                try:
+                    ui._stats_var.set(self.stats_overlay)
+                except Exception:
+                    pass
+            if ui:
+                self.ui_calls.put(toggle_stats)
             return
         if action == "menu":
             ui = getattr(self, "ui", None)
@@ -1193,19 +1222,59 @@ class Launcher:
             return None
         return [rect.left, rect.top], [rc.right, rc.bottom]
 
-    def _initial_container_pos(self):
+    def _initial_container_pos(self, outer_w=0, outer_h=0):
+        """Centred start position; never lets a failure stop the window being created"""
+        try:
+            return self._centred_container_pos(outer_w, outer_h)
+        except Exception as e:
+            logger.warning(f"Couldn't work out the centred position: {e}")
+            return DEFAULT_CONTAINER_X, DEFAULT_CONTAINER_Y
+
+    def _centred_container_pos(self, outer_w, outer_h):
+        """
+        Where the stage window is created: centred on the monitor together with
+        the control panel to its right ([ stream ][ panel ]), so nothing has to
+        jump into place later. The monitor is the one SplitCPY was last on.
+        The control panel fine-tunes both once it exists (centre_with_stage).
+        """
+        MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY = 0, 1
+        self.user32.MonitorFromPoint.restype = wintypes.HANDLE
+        self.user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+        monitor = None
         pos = self.config.get("container_pos", None)
         try:
-            x, y = int(pos[0]), int(pos[1])
-            # Only reuse it if it's still on a monitor
-            MONITOR_DEFAULTTONULL = 0
-            pt = wintypes.POINT(x + 50, y + 20)
-            self.user32.MonitorFromPoint.restype = wintypes.HANDLE
-            if self.user32.MonitorFromPoint(pt, MONITOR_DEFAULTTONULL):
-                return x, y
+            monitor = self.user32.MonitorFromPoint(
+                wintypes.POINT(int(pos[0]) + 50, int(pos[1]) + 20), MONITOR_DEFAULTTONULL)
         except (TypeError, ValueError, IndexError):
             pass
-        return DEFAULT_CONTAINER_X, DEFAULT_CONTAINER_Y
+        if not monitor:
+            monitor = self.user32.MonitorFromPoint(wintypes.POINT(0, 0), MONITOR_DEFAULTTOPRIMARY)
+
+        # The same structure win32_dock declares GetMonitorInfoW with
+        from src.win32_dock import _MONITORINFO
+        self.user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_MONITORINFO)]
+        info = _MONITORINFO()
+        info.cbSize = ctypes.sizeof(info)
+        if not outer_w or not self.user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            return DEFAULT_CONTAINER_X, DEFAULT_CONTAINER_Y
+        work = info.rcWork
+        try:
+            dpi = self.user32.GetDpiForSystem() / 96
+        except Exception:
+            dpi = 1.0
+        # Centre what you actually see: the panel is its width plus a 1 px
+        # frame; the stage loses Windows 10/11's invisible resize border on
+        # the sides and bottom (the side ones cancel out horizontally)
+        panel_w = int(PANEL_WIDTH * dpi) + 2
+        SM_CXSIZEFRAME, SM_CXPADDEDBORDER = 32, 92
+        border = self.user32.GetSystemMetrics(SM_CXSIZEFRAME) + self.user32.GetSystemMetrics(SM_CXPADDEDBORDER)
+        work_w, work_h = work.right - work.left, work.bottom - work.top
+        if outer_w - 2 * border + panel_w > work_w:
+            x = work.left + max(0, (work_w - outer_w) // 2)
+        else:
+            x = work.left + (work_w - outer_w - panel_w) // 2
+        y = work.top + max(0, (work_h - outer_h + border) // 2)
+        return x, y
 
     # ------------------------------------------------------------------
     # Profiles (saved setups)
@@ -1339,6 +1408,16 @@ class Launcher:
             self._overlay_listener.stop()
             self._overlay_listener = None
         self.fit_container_to_content()
+
+    def set_stats_overlay(self, on):
+        """Show / hide the stream stats overlay. No restart needed."""
+        self.stats_overlay = bool(on)
+        try:
+            self.config.set("stats_overlay", self.stats_overlay)
+        except Exception:
+            pass
+        if self._stats:
+            self._stats.set_enabled(self.stats_overlay)
 
     def _start_overlay_listener(self):
         if self._overlay_listener:
@@ -1991,22 +2070,22 @@ class Launcher:
     def launch(self):
         self.running = True
         self._wndproc = self._create_wnd_proc()
-        show_loading_screen()
-
         adb_bin = resolve_adb("adb")
-        serial = detect_device(adb_bin)
 
-        # No USB device: quietly reconnect a paired handheld over Wi-Fi first
-        # (finds its current port via the network, or uses the last address)
-        if not serial:
+        def find_device():
+            """USB first, then quietly reconnect a paired handheld over Wi-Fi
+            (finds its current port via the network, or uses the last address)"""
+            found = detect_device(adb_bin)
+            if found:
+                return found
             logger.info("No USB device - trying wireless auto-connect")
-            serial, target = auto_connect_wireless(
+            found, target = auto_connect_wireless(
                 adb_bin,
                 saved_ip=self.config.get("wireless_connect_ip", None),
                 saved_port=self.config.get("wireless_connect_port", None),
                 timeout=2.5,
             )
-            if serial and target:
+            if found and target:
                 ip, port = target.rsplit(":", 1)
                 try:
                     cfg = self.config.load()
@@ -2014,8 +2093,15 @@ class Launcher:
                     self.config.save(cfg)
                 except Exception as e:
                     logger.warning(f"Could not save wireless address: {e}")
-            if serial:
-                logger.info(f"Wireless auto-connect succeeded: {serial}")
+            if found:
+                logger.info(f"Wireless auto-connect succeeded: {found}")
+            return found
+
+        # The splash stays up until the control panel is on screen (closed by
+        # CTkUI._reveal), or until a dialog needs the user
+        splash.show()
+        splash.set_status("Looking for your device...")
+        serial = find_device()
 
         # Still nothing: wait for it (connects by itself the moment the Thor's
         # Wireless debugging comes on); pairing/manual connect from there
@@ -2023,7 +2109,10 @@ class Launcher:
             logger.info("No device found on boot - waiting for one")
             default_boot_profile = BUILTIN_PROFILES.get("ayn_thor") or list(BUILTIN_PROFILES.values())[0]
             self.scrcpy = ScrcpyManager(profile=default_boot_profile, scale=self.launch_scale, max_fps=self.max_fps)
+            splash.close()
             serial = wait_for_device(self.scrcpy, config=self.config)
+            if serial:
+                splash.show("Connecting...")
             if not serial:
                 logger.info("No device - user quit")
                 self.stop()
@@ -2091,6 +2180,7 @@ class Launcher:
 
             logger.info(f"Using remembered profile: '{chosen_profile.name}'")
         else:
+            splash.close()
             chosen_profile = show_device_selector(
                 BUILTIN_PROFILES,
                 adb_bin,
@@ -2098,6 +2188,7 @@ class Launcher:
                 custom_store=self.custom_profiles,
                 parent_window=self._tk_root,
             )
+            splash.show("Connecting...")
             # Clear any stale per-device scale
             if chosen_profile is not None:
                 try:
@@ -2166,9 +2257,11 @@ class Launcher:
         # Start scrcpy
         if serial:
             logger.info(f"Starting scrcpy with device: {serial} (mode: {self.scrcpy.connection_mode})")
+            splash.set_status("Starting streams...")
             try:
                 self.scrcpy.start_scrcpy(serial=serial)
             except RuntimeError as e:
+                splash.close()
                 messagebox.showerror(
                     "Scrcpy Failed to Start",
                     str(e) + "\n\nThe profile editor will open so you can fix the extra args.",
@@ -2198,15 +2291,20 @@ class Launcher:
             self._tk_root = None
 
         # Create control panel
+        splash.set_status("Opening...")
         self.ui = CTkUI(self)
         self._tk_root = self.ui.window
+        from src.stats_overlay import StatsOverlay
+        self._stats = StatsOverlay(self, self.ui.window)
+        self._stats.set_enabled(self.stats_overlay)
 
-        # Apply the default profile once the stage window exists, and put the
-        # panel beside the stage rather than on top of it
+        # Apply the default profile once the stage window exists. Stream and
+        # panel open side by side, centred on the monitor as a pair; again
+        # after the default profile, which can change the stream's size
         self.ui.window.after(1200, self.ui.load_default_profile)
-        self.ui.window.after(250, self.ui.fit_height)
-        self.ui.window.after(400, self.ui.place_beside_stage)
-        self.ui.window.after(1600, self.ui.place_beside_stage)
+        # fit_height sizes the (still invisible) panel, centres it with the
+        # stream and only then shows it, so it never appears in the wrong place
+        self.ui.window.after(10, self.ui.fit_height)
 
         self.ui.run()
 
@@ -2321,6 +2419,7 @@ class Launcher:
         4) Closes the container window
         5) Force-exits
         """
+        splash.close()
         if not self.running:
             return
         self.running = False

@@ -40,7 +40,7 @@ SCRCPY_CREATION_FLAGS = CREATE_NO_WINDOW | HIGH_PRIORITY_CLASS
 
 # Scrcpy startup retry config
 SCRCPY_RETRY_COUNT = 2
-SCRCPY_START_DELAY = 1.0
+SCRCPY_START_DELAY = 0.2
 
 # ADB command timeouts
 ADB_CAPTURE_OUTPUT = True
@@ -121,6 +121,19 @@ WIRELESS_PROFILE = {
     "stable": (1024, 800, 4),
 }
 AUDIO_BIT_RATE = "128K"
+
+# Video codec. H.265 (HEVC) keeps more detail than H.264 at the same bitrate
+# (fine scanlines, dark scenes) at the cost of a little more PC decoding work.
+# The AYN Thor has a hardware H.265 encoder (c2.qti.hevc.encoder).
+VIDEO_CODECS = ("h264", "h265")
+VIDEO_CODEC_LABELS = {"h264": "H.264", "h265": "H.265 (experimental)"}
+
+# How the PC scales the picture up/down to the window. Applied by the SDL3
+# proxy in bin/SDL3.dll (native/sdl_scale_proxy) through SPLITCPY_SCALE_MODE.
+# SDL's "pixelart" mode was tested and has no effect on scrcpy's YUV video
+# texture (smooth on Direct3D 11, nearest on Direct3D 9), so it isn't offered.
+SCALE_FILTERS = ("linear", "nearest")
+SCALE_FILTER_LABELS = {"linear": "Smooth", "nearest": "Sharp (pixel)"}
 
 # Picture quality = video bitrate multiplier. More bits = sharper fast motion
 # and dark scenes (less blocking), but more bandwidth. Max is only worth it
@@ -258,9 +271,23 @@ DEFAULT_WIRELESS_PORT = 5555
 WIFI_LOCK_DEX = "splitcpy-wifilock.dex"
 WIFI_LOCK_REMOTE = "/data/local/tmp/splitcpy-wifilock.dex"
 WIFI_LOCK_PUSH_TIMEOUT = 10
+# Process name on the device (app_process --nice-name), used to find leftovers
+WIFI_LOCK_NAME = "splitcpy-wifilock"
+# Ends any helper, including 1.0.1's (no nice-name). The [x] brackets stop
+# pkill -f from matching the shell running this very command.
+WIFI_LOCK_KILL = "pkill -f '[s]plitcpy-wifilock'; pkill -f 'app_process / [W]ifiLock'; true"
+# Heartbeat to the helper; it quits after 15 s without one (dead connection)
+WIFI_LOCK_HEARTBEAT_S = 3
 
-# Turn scrcpy's vsync on when the PC monitor refreshes at least this fast
+# VSync: "auto" turns it on when the PC monitor refreshes at least this fast
 VSYNC_MIN_MONITOR_HZ = 100
+VSYNC_MODES = ("auto", "on", "off")
+# Video buffer: holds frames this long and plays them out evenly, hiding
+# Wi-Fi stalls shorter than that, for that much extra delay all the time.
+# Good for slow games; leave Off for precision / rhythm games.
+VIDEO_BUFFERS = (0, 50, 100)
+VIDEO_BUFFER_LABELS = {0: "Off", 50: "50 ms (smoother)", 100: "100 ms (smoothest)"}
+VSYNC_LABELS = {"auto": "Auto", "on": "On", "off": "Off"}
 
 # Main ScrcpyManager class
 class ScrcpyManager:
@@ -274,7 +301,9 @@ class ScrcpyManager:
                  adb_bin=None, enable_audio_top=True, max_fps=int(DEFAULT_MAX_FPS),
                  audio_mode="pc", audio_latency="low",
                  crops=None, quality="high", screens_off=False,
-                 render_driver="direct3d", bottom_fps=0):
+                 render_driver="direct3d11", bottom_fps=0,
+                 video_codec="h264", scale_filter="linear", hw_decode=True,
+                 vsync="auto", video_buffer=0):
         """
         Initialize the scrcpy manager.
         """
@@ -294,8 +323,19 @@ class ScrcpyManager:
         self.audio_latency = audio_latency if audio_latency in AUDIO_LATENCY_MODES else "low"
         self.quality = quality if quality in QUALITY_MODES else "high"
         self.screens_off = bool(screens_off)  # unused: screens are dimmed via settings
-        self.render_driver = render_driver if render_driver in RENDER_DRIVERS else "direct3d"
+        self.render_driver = render_driver if render_driver in RENDER_DRIVERS else "direct3d11"
         self.bottom_fps = int(bottom_fps) if bottom_fps in BOTTOM_FPS_OPTIONS else 0
+        self.video_codec = video_codec if video_codec in VIDEO_CODECS else "h264"
+        self.scale_filter = scale_filter if scale_filter in SCALE_FILTERS else "linear"
+        # scrcpy 5+: decode on the graphics card (D3D11VA, Direct3D 11 renderer
+        # only). scrcpy falls back to the CPU by itself if it can't start;
+        # the switch is for drivers where it starts but misbehaves.
+        self.hw_decode = bool(hw_decode)
+        self.vsync = vsync if vsync in VSYNC_MODES else "auto"
+        self.video_buffer = int(video_buffer) if video_buffer in VIDEO_BUFFERS else 0
+        # What each running stream was started with, for the stats overlay:
+        # {"top": {"codec": "h265", "mbps": 23, "log": path}, ...}
+        self.stream_info = {}
         # Visible region of each screen as (left, top, right, bottom) fractions
         # of the full frame. Applied on the PC side (viewport), so changing it
         # never restarts the stream.
@@ -718,6 +758,13 @@ class ScrcpyManager:
             args = self.default_args(stream_w, stream_h, int(BITRATE_MIN_USB * fps_factor),
                                      BITRATE_MBPS_PER_MP_USB * fps_factor, enable_audio=False)
 
+        if self.video_buffer and not any(a.startswith("--video-buffer") for a in args):
+            args = args + [f"--video-buffer={self.video_buffer}"]
+        if not self.hw_decode and not any(a.startswith("--hwdec") for a in args):
+            args = args + ["--hwdec=disabled"]
+        if not custom_args and self.video_codec != DEFAULT_VIDEO_CODEC:
+            args = [f"--video-codec={self.video_codec}" if a.startswith("--video-codec=") else a
+                    for a in args]
         return max_size, list(args)
 
     def _with_renderer(self, args):
@@ -739,6 +786,8 @@ class ScrcpyManager:
             return ["--no-audio"]
         usb_ms, wifi_ms = AUDIO_BUFFER_MS.get(self.audio_latency, AUDIO_BUFFER_MS["auto"])
         buffer_ms = wifi_ms if self.is_wireless else usb_ms
+        # Delayed video needs equally delayed sound, or audio runs ahead
+        buffer_ms = max(buffer_ms, self.video_buffer)
         args = [
             f"--audio-bit-rate={AUDIO_BIT_RATE}",
             f"--audio-buffer={buffer_ms}",
@@ -797,7 +846,10 @@ class ScrcpyManager:
         time.sleep(self.scrcpy_start_delay)
 
         # Keep the device's Wi-Fi out of power save for the whole session
-        self._start_wifi_lock(use_serial)
+        # (in the background: the streams don't need to wait for it)
+        self._wifi_lock_wanted = True
+        threading.Thread(target=self._start_wifi_lock, args=(use_serial,),
+                         name="wifi-lock-start", daemon=True).start()
 
         # Launch top screen
         logger.info("Starting top screen window")
@@ -919,6 +971,16 @@ class ScrcpyManager:
                 try:
                     log_handle = open(log_path, "wb", buffering=0)
                     self._scrcpy_log_handles.append(log_handle)
+                    codec, mbps = DEFAULT_VIDEO_CODEC, None
+                    for a in extra_args or []:
+                        if a.startswith("--video-codec="):
+                            codec = a.split("=", 1)[1]
+                        elif a.startswith("--video-bit-rate="):
+                            try:
+                                mbps = float(a.split("=", 1)[1].rstrip("Mm"))
+                            except ValueError:
+                                pass
+                    self.stream_info[role] = {"codec": codec, "mbps": mbps, "log": log_path}
                     stdout_target = log_handle
                     stderr_target = subprocess.STDOUT
                     logger.info(f"Scrcpy {role} output -> {log_path}")
@@ -941,8 +1003,13 @@ class ScrcpyManager:
                 # stays off there.
                 child_env = os.environ.copy()
                 monitor_hz = self._monitor_hz()
-                child_env["SDL_RENDER_VSYNC"] = "1" if monitor_hz >= VSYNC_MIN_MONITOR_HZ else "0"
-                logger.info(f"Monitor {monitor_hz} Hz -> vsync {'on' if child_env['SDL_RENDER_VSYNC'] == '1' else 'off'}")
+                if self.vsync == "auto":
+                    vsync_on = monitor_hz >= VSYNC_MIN_MONITOR_HZ
+                else:
+                    vsync_on = self.vsync == "on"
+                child_env["SDL_RENDER_VSYNC"] = "1" if vsync_on else "0"
+                child_env["SPLITCPY_SCALE_MODE"] = self.scale_filter
+                logger.info(f"Monitor {monitor_hz} Hz, VSync {self.vsync} -> {'on' if vsync_on else 'off'}")
                 # Strip PyInstaller bootloader env vars so a frozen-
                 # parent's _MEIPASS isn't inherited by scrcpy.
                 for _k in (
@@ -1002,7 +1069,9 @@ class ScrcpyManager:
         the device can never be left with power save off. Best effort - any
         failure only means the old behaviour.
         """
-        self._stop_wifi_lock()
+        wanted = getattr(self, "_wifi_lock_wanted", True)
+        self._stop_wifi_lock()          # an older helper of this manager, if any
+        self._wifi_lock_wanted = wanted
         if not self._is_wireless_serial(serial) or not self.adb_bin:
             return
         dex = os.path.join(os.path.dirname(self.adb_bin), WIFI_LOCK_DEX)
@@ -1018,16 +1087,27 @@ class ScrcpyManager:
             if push.returncode != 0:
                 logger.warning(f"Could not push Wi-Fi lock helper: {(push.stderr or push.stdout).strip()}")
                 return
+            # A helper left over from a session whose connection died silently
+            # would keep power save off; end it before starting a fresh one.
+            # (Separate call: in the same shell the pattern would match itself.)
+            subprocess.run([self.adb_bin, "-s", serial, "shell", WIFI_LOCK_KILL],
+                           capture_output=True, timeout=WIFI_LOCK_PUSH_TIMEOUT,
+                           creationflags=CREATE_NO_WINDOW)
             proc = subprocess.Popen(
                 [self.adb_bin, "-s", serial, "shell",
-                 f"CLASSPATH={WIFI_LOCK_REMOTE} app_process / WifiLock"],
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                 f"CLASSPATH={WIFI_LOCK_REMOTE} app_process / --nice-name={WIFI_LOCK_NAME} WifiLock"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, errors="replace", creationflags=CREATE_NO_WINDOW,
             )
             process_guard.adopt(proc)
             self._wifi_lock_proc = proc
+            if not getattr(self, "_wifi_lock_wanted", True):
+                self._stop_wifi_lock()  # the stream stopped while this was starting
+                return
             threading.Thread(target=self._watch_wifi_lock, args=(proc,),
                              name="wifi-lock", daemon=True).start()
+            threading.Thread(target=self._wifi_lock_heartbeat, args=(proc,),
+                             name="wifi-lock-beat", daemon=True).start()
         except Exception as e:
             logger.warning(f"Could not start Wi-Fi lock helper: {e}")
 
@@ -1048,6 +1128,17 @@ class ScrcpyManager:
             return 0
 
     @staticmethod
+    def _wifi_lock_heartbeat(proc):
+        """Tell the helper the PC is still there; it quits if this stops"""
+        while proc.poll() is None:
+            try:
+                proc.stdin.write(".\n")
+                proc.stdin.flush()
+            except Exception:
+                return
+            time.sleep(WIFI_LOCK_HEARTBEAT_S)
+
+    @staticmethod
     def _watch_wifi_lock(proc):
         """Log the helper's output (and drain its pipe) until it exits"""
         try:
@@ -1065,6 +1156,7 @@ class ScrcpyManager:
 
     def _stop_wifi_lock(self):
         proc, self._wifi_lock_proc = self._wifi_lock_proc, None
+        self._wifi_lock_wanted = False
         if not proc or proc.poll() is not None:
             return
         try:
@@ -1214,7 +1306,9 @@ class ScrcpyManager:
                         "shell",
                         "pkill",
                         "-f",
-                        "app_process",
+                        # Only scrcpy's server: a bare "app_process" also
+                        # killed other apps' helpers (e.g. Cocoon launcher's)
+                        "com.genymobile.scrcpy.Server",
                     ],
                     capture_output=ADB_CAPTURE_OUTPUT,
                     timeout=SCRCPY_TERMINATE_TIMEOUT,
@@ -1227,6 +1321,15 @@ class ScrcpyManager:
                 logger.warning("Timeout killing app_process")
             except Exception as AppProcessKillError:
                 logger.warning(f"Error killing app_process: {AppProcessKillError}")
+
+            # The Wi-Fi lock helper runs under its own name, so the
+            # app_process kill above doesn't match it
+            try:
+                subprocess.run([self.adb_bin, "-s", self.serial, "shell", WIFI_LOCK_KILL],
+                               capture_output=ADB_CAPTURE_OUTPUT, timeout=SCRCPY_TERMINATE_TIMEOUT,
+                               creationflags=CREATE_NO_WINDOW)
+            except Exception as WifiLockKillError:
+                logger.debug(f"Error ending Wi-Fi lock helper: {WifiLockKillError}")
 
             # Remove port forwards
             try:

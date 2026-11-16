@@ -7,6 +7,11 @@
 // running it; when the stream stops (or SplitCPY dies) the shell closes, this
 // process is killed and Android drops the lock through binder death.
 //
+// SplitCPY also writes a heartbeat line to stdin every few seconds. If the
+// connection dies silently (PC loses power, router drops) the shell may stay
+// open on the device for minutes, so the helper quits by itself once no
+// heartbeat has arrived for HEARTBEAT_TIMEOUT_MS, or stdin closes.
+//
 // Build: see android/wifilock/build.py
 
 import android.os.Binder;
@@ -20,6 +25,8 @@ public final class WifiLock {
     private static final int MODE_HIGH_PERF = 3;
     private static final int MODE_LOW_LATENCY = 4;
     private static final String PKG = "com.android.shell";
+    private static final long HEARTBEAT_TIMEOUT_MS = 15000;
+    private static volatile long lastBeat = System.currentTimeMillis();
 
     public static void main(String[] args) throws Exception {
         Class<?> sm = Class.forName("android.os.ServiceManager");
@@ -54,9 +61,29 @@ public final class WifiLock {
         }
         System.out.println("LOCKED");
         System.out.flush();
-        // Hold until killed
+
+        Thread reader = new Thread(() -> {
+            try {
+                java.io.InputStream in = System.in;
+                byte[] buf = new byte[64];
+                while (in.read(buf) >= 0) {
+                    lastBeat = System.currentTimeMillis();
+                }
+            } catch (Throwable ignored) {
+            }
+            System.out.println("EXIT stdin closed");
+            System.exit(0);
+        });
+        reader.setDaemon(true);
+        reader.start();
+
+        // Hold until killed, stdin closes or the heartbeat stops
         while (true) {
-            Thread.sleep(Long.MAX_VALUE);
+            Thread.sleep(1000);
+            if (System.currentTimeMillis() - lastBeat > HEARTBEAT_TIMEOUT_MS) {
+                System.out.println("EXIT heartbeat lost");
+                System.exit(0);
+            }
         }
     }
 

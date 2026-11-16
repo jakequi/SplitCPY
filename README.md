@@ -21,7 +21,7 @@
 
 ## Download
 
-Grab **`SplitCPY-v1.0.1-windows.zip`** from the
+Grab **`SplitCPY-v1.1.0-windows.zip`** from the
 [latest release](https://github.com/jakequi/SplitCPY/releases/latest), unzip it anywhere
 and run **`SplitCPY.exe`**. scrcpy and adb are included - nothing else to install.
 `config/` and `logs/` are created next to the exe on first launch.
@@ -91,6 +91,7 @@ debugging is off it waits and connects the moment you turn it on.
 | Ctrl+Alt+F, or F11 while SplitCPY is in front | Fullscreen |
 | Ctrl+Alt+M | Show / hide the control panel (also over fullscreen) |
 | Ctrl+Alt+O | Dim / restore the Thor's screens |
+| Ctrl+Alt+I | Show / hide the stats overlay (FPS, codec, bitrate, connection) |
 
 ### OBS setup
 Add a **Window Capture** of the `SplitCPY | <device>` window, then right-click it >
@@ -114,7 +115,7 @@ Suggestions and bug reports: [issues](https://github.com/jakequi/SplitCPY/issues
 
 - **Audio warps or crackles (Wi-Fi):** run *Test Connection & Auto-Set*, or set Latency to
   Balanced, then Stable. USB gives the cleanest audio.
-- **Black or flickering screens:** Settings > Renderer > Direct3D 9.
+- **Black or flickering screens:** Display (this PC) > Renderer > Direct3D 9 (this also turns off hardware decoding).
 - **Handheld not found:** check USB debugging / Wireless debugging is on and both devices are on
   the same network; *Pair / Connect Manually* in the waiting window lets you pair again.
 - **Logs:** `logs/dualcpy_<date>.log` and per-stream `logs/scrcpy_*.log` next to the app.
