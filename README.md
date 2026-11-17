@@ -21,7 +21,7 @@
 
 ## Download
 
-Grab **`SplitCPY-v1.1.0-windows.zip`** from the
+Grab **`SplitCPY-v1.2.0-windows.zip`** from the
 [latest release](https://github.com/jakequi/SplitCPY/releases/latest), unzip it anywhere
 and run **`SplitCPY.exe`**. scrcpy and adb are included - nothing else to install.
 `config/` and `logs/` are created next to the exe on first launch.
@@ -120,6 +120,16 @@ Suggestions and bug reports: [issues](https://github.com/jakequi/SplitCPY/issues
   the same network; *Pair / Connect Manually* in the waiting window lets you pair again.
 - **Logs:** `logs/splitcpy_<date>.log` and per-stream `logs/scrcpy_*.log` next to the app.
 
+### Known issues
+
+- **Audio output "Both": the PC and the handheld aren't in sync** - the PC's copy arrives later,
+  because it is captured, encoded, sent and buffered (the Latency setting) before it plays. Lower
+  Latency narrows the gap; it can't be removed entirely.
+- **JamesDSP (root build) stopped working after a session** - once, fixed by restarting it.
+  Not confirmed to be SplitCPY: while streaming with *Audio output: PC*, Android moves JamesDSP's
+  effect to the capture output scrcpy records from, and it may not always move back to the
+  speaker afterwards. If it happens, restart JamesDSP; *Audio output: Device* avoids the capture.
+
 ---
 
 ## Bundled software & licences
@@ -127,13 +137,22 @@ Suggestions and bug reports: [issues](https://github.com/jakequi/SplitCPY/issues
 - SplitCPY is licensed under the **GNU GPL v3.0** - see [LICENSE](LICENSE). You are free to
   modify and redistribute it under the same terms.
 - Includes **[scrcpy](https://github.com/Genymobile/scrcpy) v5.0.1** by Genymobile / Romain Vimont,
-  unmodified, under the Apache License 2.0 ([bin/LICENSE_scrcpy.txt](bin/LICENSE_scrcpy.txt)),
-  with the libraries its Windows release ships (SDL, FFmpeg, adb, libusb) under their own licences.
+  under the Apache License 2.0 ([bin/LICENSE_scrcpy.txt](bin/LICENSE_scrcpy.txt)), with the
+  libraries its Windows release ships (SDL, FFmpeg, adb, libusb) under their own licences. The
+  Windows program is unmodified; the on-device `scrcpy-server` is rebuilt from scrcpy's source
+  with one change: if Android refuses scrcpy 5's audio playback capture request (Android 13, used
+  by *Audio output: Both*), it retries without voice-call audio, then with media only. The patch
+  and build script are in [native/scrcpy_server_patch](native/scrcpy_server_patch).
 - scrcpy's **[SDL](https://www.libsdl.org/)** library (zlib licence) is included as `bin/SDL3_real.dll`;
   `bin/SDL3.dll` is SplitCPY's own small pass-through that adds the Sharp scaling option
   (source in [native/sdl_scale_proxy](native/sdl_scale_proxy)).
 - UI font **[Cal Sans](https://github.com/calcom/font)**, SIL Open Font License 1.1
   ([assets/fonts/OFL.txt](assets/fonts/OFL.txt)).
+- Theme fonts: **[Pictochat](https://fontstruct.com/fontstructions/show/377692)** by Kirby3, Creative
+  Commons Attribution-ShareAlike 3.0 ([assets/fonts/pictochat](assets/fonts/pictochat)), and
+  **[M PLUS Rounded 1c](https://github.com/coz-m/MPLUS_FONTS)**, SIL Open Font License 1.1
+  ([assets/fonts/OFL-MPLUSRounded1c.txt](assets/fonts/OFL-MPLUSRounded1c.txt)). The 3DS theme uses
+  Fontworks' FOT-Rodin instead if a licensed copy is installed on the PC (it isn't bundled).
 
 ## Acknowledgements
 

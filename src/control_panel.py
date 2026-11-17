@@ -36,9 +36,10 @@ from src.file_transfer_dialog import FileTransferDialog
 from src.ui_constants import (
     BG_COLOUR, PANEL_COLOUR, BORDER_COLOUR, TEXT_COLOUR,
     ACCENT_COLOUR, ACCENT2_COLOUR, TOP_COLOUR, BOTTOM_COLOUR,
-    SUCCESS_COLOUR, DANGER_COLOUR, WARNING_COLOUR,
+    SUCCESS_COLOUR, DANGER_COLOUR, WARNING_COLOUR, MUTED_COLOUR, ON_ACCENT,
+    CORNER, OUTLINE, OUTLINE_COLOUR, HEADER_STYLE, HEADER_TINT, SELECT_STYLE, SELECT_BORDER,
     CALSANS_FAMILY, ICON_PATH, FONT_PATH,
-    resource_path, load_calsans, make_font, apply_window_icon,
+    resource_path, load_calsans, make_font, make_heading_font, apply_window_icon,
 )
 from src.device_profile_editor import DeviceProfileEditorDialog
 
@@ -176,18 +177,34 @@ class CTkUI:
         logger.info("Control UI initialisation finished")
 
     # UI construction
+    @staticmethod
+    def _paint(btn, on):
+        """
+        Selected / main look of a button, per theme: a solid accent fill, or
+        (3DS) a white face with a thick accent border and accent text
+        """
+        if SELECT_STYLE == "glow":
+            btn.configure(fg_color=PANEL_COLOUR, hover_color=BG_COLOUR,
+                          border_width=SELECT_BORDER if on else OUTLINE,
+                          border_color=ACCENT_COLOUR if on else OUTLINE_COLOUR,
+                          text_color=ACCENT_COLOUR if on else TEXT_COLOUR)
+        else:
+            btn.configure(fg_color=ACCENT_COLOUR if on else PANEL_COLOUR,
+                          hover_color=ACCENT2_COLOUR if on else BORDER_COLOUR,
+                          border_width=OUTLINE, border_color=ACCENT_COLOUR if on else OUTLINE_COLOUR,
+                          text_color=ON_ACCENT if on else TEXT_COLOUR)
+
     def _button(self, parent, text, command, accent=False, **kw):
         """Consistently styled button"""
         if accent:
-            return ctk.CTkButton(
-                parent, text=text, command=command,
-                fg_color=ACCENT_COLOUR, hover_color=ACCENT2_COLOUR,
-                text_color="#ffffff", font=make_font(13, "bold"), **kw,
-            )
+            b = ctk.CTkButton(parent, text=text, command=command,
+                              font=make_font(13, "bold"), **kw)
+            self._paint(b, True)
+            return b
         return ctk.CTkButton(
             parent, text=text, command=command,
             fg_color=PANEL_COLOUR, hover_color=BORDER_COLOUR,
-            border_color=BORDER_COLOUR, border_width=1,
+            border_color=OUTLINE_COLOUR, border_width=OUTLINE,
             text_color=TEXT_COLOUR, font=make_font(13), **kw,
         )
 
@@ -219,7 +236,7 @@ class CTkUI:
         holder = tk.Frame(self._scroll, bg=BG_COLOUR, height=1)
         holder.pack(fill="x", padx=16)
         lbl = ctk.CTkLabel(holder, text=text, font=make_font(11),
-                           text_color="#7d8494",
+                           text_color=MUTED_COLOUR,
                            anchor="w", justify="left", wraplength=380)
         sec = getattr(self, "_current_section", None)
         if sec is not None:
@@ -280,9 +297,24 @@ class CTkUI:
         ctk.CTkLabel(
             title_row,
             text="SplitCPY",
-            font=make_font(22, "bold"),
+            font=make_heading_font(22),
             text_color=TEXT_COLOUR,
         ).pack(side="left", padx=10)
+
+        # Theme picker, top right opposite the title (no stream restart)
+        from src.ui_constants import THEMES, CURRENT_THEME
+        self._theme_label_to_key = {t["label"]: k for k, t in THEMES.items()}
+        self._theme_var = tk.StringVar(value=THEMES[CURRENT_THEME]["label"])
+        ctk.CTkOptionMenu(
+            title_row, variable=self._theme_var, values=[t["label"] for t in THEMES.values()],
+            command=lambda v: self.window.after(10, lambda: self.set_theme(self._theme_label_to_key[v])),
+            width=168, height=28,
+            fg_color=PANEL_COLOUR, button_color=BORDER_COLOUR,
+            button_hover_color=ACCENT_COLOUR, text_color=TEXT_COLOUR,
+            dropdown_fg_color=PANEL_COLOUR, dropdown_hover_color=BORDER_COLOUR,
+            dropdown_text_color=TEXT_COLOUR,
+            font=make_font(12), dropdown_font=make_font(12), dynamic_resizing=False,
+        ).pack(side="right")
 
         # Active profile + connection type
         self._current_profile_label = ctk.CTkLabel(
@@ -329,7 +361,7 @@ class CTkUI:
             b = ctk.CTkButton(
                 row, textvariable=var_text, command=command,
                 fg_color=PANEL_COLOUR, hover_color=BORDER_COLOUR,
-                border_color=BORDER_COLOUR, border_width=1,
+                border_color=OUTLINE_COLOUR, border_width=OUTLINE,
                 text_color=TEXT_COLOUR, font=make_font(13),
             )
             b.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 3, 0 if col == 2 else 3))
@@ -375,7 +407,7 @@ class CTkUI:
             self._scroll, text="Default (both Full)", width=150, height=26,
             command=self._on_aspect_default,
             fg_color=PANEL_COLOUR, hover_color=BORDER_COLOUR,
-            border_color=BORDER_COLOUR, border_width=1,
+            border_color=OUTLINE_COLOUR, border_width=OUTLINE,
             text_color=TEXT_COLOUR, font=make_font(12),
         ).pack(anchor="w", padx=16, pady=(6, 2))
         self._hint("Pick the ratio of what you're playing to cut the black bars - the screen then "
@@ -522,14 +554,12 @@ class CTkUI:
         ctk.CTkEntry(
             save_row, textvariable=self._profile_name_var,
             placeholder_text="Profile name, e.g. DS streaming",
-            fg_color=PANEL_COLOUR, border_color=BORDER_COLOUR,
+            fg_color=PANEL_COLOUR, border_color=OUTLINE_COLOUR,
             text_color=TEXT_COLOUR, font=make_font(13),
         ).grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        ctk.CTkButton(
-            save_row, text="Save", width=80, command=self._on_save_profile,
-            fg_color=ACCENT_COLOUR, hover_color=ACCENT2_COLOUR, font=make_font(13),
-        ).grid(row=0, column=1)
-        self._profile_list = ctk.CTkFrame(self._scroll, fg_color=PANEL_COLOUR, corner_radius=8)
+        self._button(save_row, "Save", self._on_save_profile, accent=True, width=80) \
+            .grid(row=0, column=1)
+        self._profile_list = ctk.CTkFrame(self._scroll, fg_color=PANEL_COLOUR, corner_radius=CORNER + 2)
         self._profile_list.pack(fill="x", padx=16, pady=(6, 4))
         self._profile_list.columnconfigure(0, weight=1)
         self.refresh_profile_list()
@@ -539,7 +569,7 @@ class CTkUI:
         self._section("Misc Settings")
         self._device_profiles_var = tk.BooleanVar(value=self.l.device_profiles_enabled)
         ctk.CTkSwitch(
-            self._scroll, text="Device profiles (other handhelds / custom screen setups)",
+            self._scroll, text="Device profiles (other handhelds / screens)",
             variable=self._device_profiles_var, command=self._on_device_profiles_toggle,
             progress_color=ACCENT_COLOUR, text_color=TEXT_COLOUR, font=make_font(13),
         ).pack(anchor="w", padx=16, pady=(4, 2))
@@ -572,6 +602,37 @@ class CTkUI:
 
         self._refresh_view_buttons()
 
+    def set_theme(self, name):
+        """Switch theme: recolour everything and rebuild the panel. No stream restart."""
+        from src import ui_constants
+        if name == ui_constants.CURRENT_THEME:
+            return
+        ui_constants.apply_theme(name)   # also updates this module's colour names
+        try:
+            self.l.config.set("theme", name)
+        except Exception:
+            pass
+        try:
+            scroll_at = self._root_scroll._parent_canvas.yview()[0]
+        except Exception:
+            scroll_at = 0.0
+        self.window.configure(fg_color=BG_COLOUR)
+        self._root_scroll.destroy()
+        self._sections = []
+        self._slider_refs = {}
+        self._current_section = None
+        self._build_ui()
+        self.fit_height(place=False)
+        try:
+            me = windll.user32.GetParent(self.window.winfo_id()) or self.window.winfo_id()
+            enable_dark_titlebar(me)
+            # Windows only repaints the title bar colour when the frame changes
+            windll.user32.SetWindowPos(me, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)
+        except Exception:
+            pass
+        self.window.after(50, lambda: self._root_scroll._parent_canvas.yview_moveto(scroll_at))
+        self.show_status(f"Theme: {ui_constants.THEMES[name]['label']}", "success", duration=3.0)
+
     def _dock_label(self):
         return "Split" if self.l.docked else "Combine"
 
@@ -589,17 +650,13 @@ class CTkUI:
         try:
             for key, b in self._view_btns.items():
                 on = key == self.l.view_mode
-                b.configure(fg_color=ACCENT_COLOUR if on else PANEL_COLOUR,
-                            hover_color=ACCENT2_COLOUR if on else BORDER_COLOUR,
-                            text_color="#ffffff" if on else TEXT_COLOUR,
-                            state="normal" if self.l.docked else "disabled")
+                self._paint(b, on)
+                b.configure(state="normal" if self.l.docked else "disabled")
             self._fullscreen_btn_text.set("Exit Fullscreen" if self.l.fullscreen else "Fullscreen")
             self._dock_btn_text.set(self._dock_label())
             # Highlight only while the mode is actually on
             for btn, on in ((self._fullscreen_btn, self.l.fullscreen), (self._dock_btn, not self.l.docked)):
-                btn.configure(fg_color=ACCENT_COLOUR if on else PANEL_COLOUR,
-                              hover_color=ACCENT2_COLOUR if on else BORDER_COLOUR,
-                              text_color="#ffffff" if on else TEXT_COLOUR)
+                self._paint(btn, on)
         except Exception as e:
             logger.debug(f"View button refresh failed: {e}")
 
@@ -617,18 +674,33 @@ class CTkUI:
         points at it until the next section (restored at the end of _build_ui).
         """
         root = self._root_scroll
-        row = tk.Frame(root, bg=BG_COLOUR, bd=0, highlightthickness=0)
-        row.pack(fill="x", padx=16, pady=(4, 2))
+        # Title style comes from the theme: plain, a tinted strip ("band",
+        # DS) or an accent line under the title ("underline", 3DS)
+        band = HEADER_STYLE == "band"
+        tag = HEADER_STYLE == "tag"
+        row_bg = HEADER_TINT if band else BG_COLOUR
+        row = tk.Frame(root, bg=row_bg, bd=0, highlightthickness=0)
+        row.pack(fill="x", padx=16, pady=(4, 0 if HEADER_STYLE in ("underline", "tag") else 2),
+                 ipady=2 if band else 0)
+        anchor = row
+        if HEADER_STYLE in ("underline", "tag"):
+            # underline: accent line under the title; tag: the name tag sits
+            # on a dark 2 px rule running across the panel
+            line_colour = OUTLINE_COLOUR if tag else HEADER_TINT
+            anchor = tk.Frame(root, bg=line_colour, height=2, bd=0, highlightthickness=0)
+            anchor.pack(fill="x", padx=16, pady=(0, 6 if tag else 4))
         collapsed = label in self._collapsed_sections
-        sec = {"hints": [], "open": False, "btn_shown": False, "label": label, "row": row}
+        sec = {"hints": [], "open": False, "btn_shown": False, "label": label,
+               "row": row, "anchor": anchor}
         sec["header"] = ctk.CTkButton(
             row, text=self._section_title(label, collapsed), anchor="w",
-            fg_color="transparent", hover_color=PANEL_COLOUR,
-            text_color=TEXT_COLOUR, font=make_font(14, "bold"),
-            width=10, height=24, corner_radius=6,
+            fg_color=HEADER_TINT if tag else "transparent",
+            hover_color=ACCENT2_COLOUR if tag else (BORDER_COLOUR if band else PANEL_COLOUR),
+            text_color=ON_ACCENT if tag else TEXT_COLOUR, font=make_heading_font(14),
+            width=10, height=26 if tag else 24, corner_radius=CORNER,
             command=lambda: self._toggle_section(sec),
         )
-        sec["header"].pack(side="left")
+        sec["header"].pack(side="left", padx=(4, 0) if band else 0)
         sec["btn"] = ctk.CTkButton(
             row, text="i", width=20, height=20, corner_radius=10,
             fg_color=BORDER_COLOUR, hover_color=ACCENT_COLOUR,
@@ -641,7 +713,7 @@ class CTkUI:
         sec["body"] = body
         sec["collapsed"] = collapsed
         if not collapsed:
-            body.pack(fill="x", after=row)
+            body.pack(fill="x", after=anchor)
         self._scroll = body
         self._current_section = sec
         self.__dict__.setdefault("_sections", []).append((label, sec))
@@ -656,7 +728,7 @@ class CTkUI:
             sec["body"].pack_forget()
             self._collapsed_sections.add(sec["label"])
         else:
-            sec["body"].pack(fill="x", after=sec["row"])
+            sec["body"].pack(fill="x", after=sec["anchor"])
             self._collapsed_sections.discard(sec["label"])
         sec["header"].configure(text=self._section_title(sec["label"], sec["collapsed"]))
         # Grow / shrink the panel to the new content height
@@ -749,7 +821,7 @@ class CTkUI:
             row, textvariable=entry_var,
             width=72,
             fg_color=PANEL_COLOUR,
-            border_color=BORDER_COLOUR,
+            border_color=OUTLINE_COLOUR,
             text_color=TEXT_COLOUR,
             font=make_font(13),
         )
@@ -837,7 +909,7 @@ class CTkUI:
             profiles = {}
         if not profiles:
             ctk.CTkLabel(self._profile_list, text="No profiles yet - set things up, name it, Save.",
-                         text_color="#7d8494", font=make_font(12)).pack(pady=10)
+                         text_color=MUTED_COLOUR, font=make_font(12)).pack(pady=10)
             return
         for name in sorted(profiles, key=str.lower):
             is_default = name == self.l.default_setup
@@ -847,16 +919,14 @@ class CTkUI:
             ctk.CTkButton(
                 row, text="\u2605" if is_default else "\u2606", width=30,
                 fg_color="transparent", hover_color=BORDER_COLOUR,
-                text_color=WARNING_COLOUR if is_default else "#7d8494",
+                text_color=WARNING_COLOUR if is_default else MUTED_COLOUR,
                 font=make_font(16),
                 command=lambda n=name: self._on_default_profile(n),
             ).grid(row=0, column=0, padx=(0, 4))
             ctk.CTkLabel(row, text=name, anchor="w", text_color=TEXT_COLOUR,
                          font=make_font(13, "bold" if is_default else "normal")) \
                 .grid(row=0, column=1, sticky="w")
-            ctk.CTkButton(row, text="Load", width=56, fg_color=ACCENT_COLOUR,
-                          hover_color=ACCENT2_COLOUR, font=make_font(12),
-                          command=lambda n=name: self._on_load_profile(n)) \
+            self._button(row, "Load", lambda n=name: self._on_load_profile(n), accent=True, width=56) \
                 .grid(row=0, column=2, padx=(4, 4))
             ctk.CTkButton(row, text="Delete", width=60, fg_color="#8b2020",
                           hover_color="#c0392b", font=make_font(12),

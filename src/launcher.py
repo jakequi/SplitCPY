@@ -2099,6 +2099,9 @@ class Launcher:
 
         # The splash stays up until the control panel is on screen (closed by
         # CTkUI._reveal), or until a dialog needs the user
+        # Saved theme first, so the splash and every window open in it
+        from src import ui_constants
+        ui_constants.apply_theme(self.config.get("theme", "default"))
         splash.show()
         splash.set_status("Looking for your device...")
         serial = find_device()

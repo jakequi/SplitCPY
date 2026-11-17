@@ -39,9 +39,10 @@ WINDOWS_BUILD_18985 = 18985
 DWMWA_USE_DARK_MODE_LEGACY = 19
 DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 
-def enable_dark_titlebar(hwnd):
+def enable_dark_titlebar(hwnd, dark=None):
     """
-    Enables dark mode titlebar for a specific window
+    Dark (or, for light themes, light) titlebar for a specific window.
+    dark=None follows the current theme.
     Works on Windows 10 1809+ and Windows 11
     Args:
         hwnd: int, Handle to the window (HWND)
@@ -56,7 +57,10 @@ def enable_dark_titlebar(hwnd):
         else:
             DWMWA_USE_DARK_MODE = DWMWA_USE_IMMERSIVE_DARK_MODE
 
-        value = wintypes.BOOL(True)
+        if dark is None:
+            from src.ui_constants import theme_is_dark
+            dark = theme_is_dark()
+        value = wintypes.BOOL(bool(dark))
         dwmapi.DwmSetWindowAttribute(
             hwnd, DWMWA_USE_DARK_MODE, ctypes.byref(value), ctypes.sizeof(value)
         )

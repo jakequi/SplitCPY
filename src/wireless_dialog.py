@@ -29,7 +29,7 @@ from src.win32_darkmode import enable_dark_titlebar
 from src.control_panel import (
     BG_COLOUR, PANEL_COLOUR, BORDER_COLOUR, TEXT_COLOUR,
     ACCENT_COLOUR, ACCENT2_COLOUR,
-    SUCCESS_COLOUR, DANGER_COLOUR, WARNING_COLOUR,
+    SUCCESS_COLOUR, DANGER_COLOUR, WARNING_COLOUR, MUTED_COLOUR,
     make_font, load_calsans, apply_window_icon,
 )
 
@@ -808,7 +808,7 @@ def wait_for_device(scrcpy_manager, config=None):
 
     ctk.CTkLabel(win, text="Looking for your Thor...", font=make_font(20, "bold"),
                  text_color=TEXT_COLOUR).pack(pady=(26, 6))
-    status = ctk.CTkLabel(win, text="Searching USB and Wi-Fi", font=make_font(12), text_color="#7d8494")
+    status = ctk.CTkLabel(win, text="Searching USB and Wi-Fi", font=make_font(12), text_color=MUTED_COLOUR)
     status.pack()
     ctk.CTkLabel(
         win,

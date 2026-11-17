@@ -1,5 +1,20 @@
 # Changelog
 
+## SplitCPY 1.2.0 - 17-11-2026
+
+### Added
+- **Themes** (dropdown at the top right of the control panel, opposite the title):
+  - **DS (PictoChat)** - PictoChat's pixel lettering throughout (the "Pictochat" font by Kirby3, CC BY-SA 3.0), square boxes with dark 2 px pixel outlines, section titles as solid blue name tags on a dark rule, PictoChat greys
+  - **3DS (HOME menu)** - white rounded buttons with thin light outlines; the selected and main buttons keep a white face with a glowing cyan border and cyan text, as on the 3DS; cyan-underlined titles; M PLUS Rounded 1c (OFL), or FOT-Rodin (the 3DS system font) if a licensed copy is installed
+  - Switch instantly without restarting the streams; the title bar, the Wireless window and the loading screen follow the theme
+
+### Fixed
+- **Audio output "Both" only played on the handheld** (since 1.1.0 / scrcpy 5.0): scrcpy 5 asks Android to capture every kind of audio including voice calls, which Android 13 (e.g. the AYN Thor) refuses for adb (`registerAudioPolicy() returned -1`), so PC audio was switched off. The bundled `scrcpy-server` is now rebuilt with a fallback: if refused, it retries without voice-call audio, then media only. Patch and build script in `native/scrcpy_server_patch`
+
+### Known issues
+- Audio output "Both": the PC's sound lags the handheld's (capture, encoding, Wi-Fi and the audio buffer); lower Latency narrows the gap
+- JamesDSP (root build) once stopped working after a session until restarted; not confirmed to be SplitCPY (see README > Known issues)
+
 ## SplitCPY 1.1.0 - 16-11-2026
 
 ### Changed
